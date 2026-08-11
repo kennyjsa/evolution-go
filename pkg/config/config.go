@@ -57,6 +57,9 @@ type Config struct {
 	NatsUrl              string
 	NatsGlobalEnabled    bool
 	NatsGlobalEvents     []string
+	NatsJetStreamEnabled bool
+	NatsStreamName       string
+	NatsStreamMaxAge     time.Duration
 	EventIgnoreGroup     bool
 	EventIgnoreStatus    bool
 	QrcodeMaxCount       int
@@ -316,6 +319,18 @@ func Load() *Config {
 		natsGlobalEvents = []string{}
 	}
 
+	// JetStream fica desligado por padrão: NATS core não exige servidor com
+	// JetStream habilitado, e ligar sozinho quebraria quem já usa NATS puro.
+	natsJetStreamEnabled := os.Getenv(config_env.NATS_JETSTREAM_ENABLED) == "true"
+	natsStreamName := os.Getenv(config_env.NATS_STREAM_NAME)
+	if natsStreamName == "" {
+		natsStreamName = "EVOLUTION"
+	}
+	natsStreamMaxAge, err := time.ParseDuration(os.Getenv(config_env.NATS_STREAM_MAX_AGE))
+	if err != nil {
+		natsStreamMaxAge = 24 * time.Hour
+	}
+
 	// Logger configurations
 	logMaxSize, _ := strconv.Atoi(os.Getenv(config_env.LOG_MAX_SIZE))
 	if logMaxSize == 0 {
@@ -380,6 +395,9 @@ func Load() *Config {
 		NatsUrl:              natsUrl,
 		NatsGlobalEnabled:    natsGlobalEnabled == "true",
 		NatsGlobalEvents:     natsGlobalEvents,
+		NatsJetStreamEnabled: natsJetStreamEnabled,
+		NatsStreamName:       natsStreamName,
+		NatsStreamMaxAge:     natsStreamMaxAge,
 		LogMaxSize:           logMaxSize,
 		LogMaxBackups:        logMaxBackups,
 		LogMaxAge:            logMaxAge,

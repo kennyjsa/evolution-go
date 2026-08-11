@@ -118,13 +118,26 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 			config.NatsUrl,
 			config.NatsGlobalEnabled,
 			config.NatsGlobalEvents,
+			config.NatsJetStreamEnabled,
+			config.NatsStreamName,
+			config.NatsStreamMaxAge,
 			loggerWrapper,
 		)
+		// O stream precisa existir antes do primeiro publish: sem ele o
+		// JetStream recusa a mensagem com "no responders".
+		if config.NatsJetStreamEnabled {
+			if err := natsProducer.CreateGlobalQueues(); err != nil {
+				logger.LogError("Failed to create JetStream stream: %v", err)
+			}
+		}
 	} else {
 		natsProducer = nats_producer.NewNatsProducer(
 			"",
 			false,
 			nil,
+			false,
+			"",
+			0,
 			loggerWrapper,
 		)
 	}
