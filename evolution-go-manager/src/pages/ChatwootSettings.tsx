@@ -22,6 +22,8 @@ const chatwootSchema = z.object({
   inboxIdentifier: z.string().min(1, "Obrigatório"),
   markAsRead: z.boolean(),
   syncGroups: z.boolean(),
+  signMsg: z.boolean(),
+  signDelimiter: z.string().optional(),
 });
 
 type ChatwootFormData = z.infer<typeof chatwootSchema>;
@@ -57,6 +59,8 @@ export default function ChatwootSettings() {
       inboxIdentifier: "",
       markAsRead: false,
       syncGroups: false,
+      signMsg: true,
+      signDelimiter: "",
     },
   });
 
@@ -85,6 +89,8 @@ export default function ChatwootSettings() {
             inboxIdentifier: config.inboxIdentifier,
             markAsRead: config.markAsRead,
             syncGroups: config.syncGroups,
+            signMsg: config.signMsg,
+            signDelimiter: config.signDelimiter || "",
           });
         }
       } catch (error) {
@@ -114,6 +120,8 @@ export default function ChatwootSettings() {
         inboxIdentifier: data.inboxIdentifier.trim(),
         markAsRead: data.markAsRead,
         syncGroups: data.syncGroups,
+        signMsg: data.signMsg,
+        signDelimiter: data.signDelimiter || "",
       });
 
       setTemConfig(true);
@@ -149,6 +157,8 @@ export default function ChatwootSettings() {
         inboxIdentifier: "",
         markAsRead: false,
         syncGroups: false,
+        signMsg: true,
+        signDelimiter: "",
       });
       toast.success("Configuração apagada.");
     } catch (error) {
@@ -299,6 +309,25 @@ export default function ChatwootSettings() {
                     <input type="checkbox" {...register("markAsRead")} />
                     Marcar mensagem como lida no WhatsApp
                   </label>
+                  <label className="flex items-center gap-2 text-sm text-foreground">
+                    <input type="checkbox" {...register("signMsg")} />
+                    Assinar a resposta com o nome do agente
+                  </label>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-foreground">
+                    Separador da assinatura
+                  </label>
+                  <input
+                    {...register("signDelimiter")}
+                    placeholder="quebra de linha"
+                    className={`mt-1 ${campoInput}`}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Fica entre o nome e o texto. Vazio usa quebra de linha, como o
+                    Evolution: <span className="font-mono">*Emilly*</span> + texto.
+                  </p>
                 </div>
               </div>
 

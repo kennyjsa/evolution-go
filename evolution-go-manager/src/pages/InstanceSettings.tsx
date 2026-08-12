@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import * as instancesApi from "@/services/api/instances";
+import * as chatwootApi from "@/services/api/chatwoot";
 import type { Instance } from "@/types/instance";
 
 const webhookSchema = z.object({
@@ -52,6 +53,7 @@ export default function InstanceSettings() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [showToken, setShowToken] = useState(false);
+  const [chatwoot, setChatwoot] = useState<chatwootApi.ChatwootConfig | null>(null);
   const isInitialized = useRef(false);
   const hasFetchedOnce = useRef(false);
 
@@ -71,6 +73,16 @@ export default function InstanceSettings() {
   } = useForm<AdvancedFormData>({
     resolver: zodResolver(advancedSchema),
   });
+
+  // Config do Chatwoot: o card precisa mostrar o estado, não só um botão.
+  // Ausência de config é o caso normal (404) e não vira erro na tela.
+  useEffect(() => {
+    if (!instanceId) return;
+    chatwootApi
+      .fetchChatwootConfig(instanceId)
+      .then(setChatwoot)
+      .catch(() => setChatwoot(null));
+  }, [instanceId]);
 
   // Fetch instance data on mount (only once)
   useEffect(() => {
@@ -540,17 +552,39 @@ export default function InstanceSettings() {
           <div className="rounded-lg border border-sidebar-border bg-card p-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Chatwoot</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold text-foreground">Chatwoot</h2>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      !chatwoot
+                        ? "bg-muted text-muted-foreground"
+                        : chatwoot.enabled
+                          ? "bg-green-500/15 text-green-600 dark:text-green-400"
+                          : "bg-yellow-500/15 text-yellow-700 dark:text-yellow-500"
+                    }`}
+                  >
+                    {!chatwoot ? "Não configurado" : chatwoot.enabled ? "Ativo" : "Desligado"}
+                  </span>
+                </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Espelha as conversas desta instância em uma inbox do Chatwoot.
+                  {chatwoot
+                    ? `Inbox ${chatwoot.inboxId || "—"} · conta ${chatwoot.accountId} · ${chatwoot.url}`
+                    : "Espelha as conversas desta instância em uma inbox do Chatwoot."}
                 </p>
+                {chatwoot && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {chatwoot.signMsg ? "Assina com o nome do agente" : "Sem assinatura"}
+                    {chatwoot.syncGroups ? " · sincroniza grupos" : ""}
+                    {chatwoot.markAsRead ? " · marca como lida" : ""}
+                  </p>
+                )}
               </div>
               <Button
                 variant="ghost"
                 onClick={() => navigate(`/manager/instances/${instanceId}/chatwoot`)}
               >
                 <MessagesSquare className="h-4 w-4 mr-2" />
-                Configurar
+                {chatwoot ? "Configurar" : "Configurar"}
               </Button>
             </div>
           </div>

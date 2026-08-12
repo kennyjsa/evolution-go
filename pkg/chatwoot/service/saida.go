@@ -23,6 +23,13 @@ type WebhookChatwoot struct {
 		FileType string `json:"file_type"`
 		DataUrl  string `json:"data_url"`
 	} `json:"attachments"`
+	Sender struct {
+		Name string `json:"name"`
+		// available_name é o nome de exibição do agente; quando o time usa
+		// apelido no atendimento, é ele que o cliente reconhece.
+		AvailableName string `json:"available_name"`
+		Type          string `json:"type"`
+	} `json:"sender"`
 	Conversation struct {
 		Id   int `json:"id"`
 		Meta struct {
@@ -78,6 +85,32 @@ func tipoDoChatwoot(fileType string) string {
 	default:
 		return "document"
 	}
+}
+
+// assina prefixa o texto com o nome de quem respondeu, como o Evolution faz.
+//
+// O negrito é o mesmo do WhatsApp (*nome*): numa inbox compartilhada o cliente
+// fala com várias pessoas da agência, e sem a assinatura todas viram um
+// interlocutor só.
+func assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto string) string {
+	if !config.SignMsg || texto == "" {
+		return texto
+	}
+
+	nome := strings.TrimSpace(hook.Sender.AvailableName)
+	if nome == "" {
+		nome = strings.TrimSpace(hook.Sender.Name)
+	}
+	// Sem nome não há o que assinar — e "**: texto" seria pior que texto puro.
+	if nome == "" {
+		return texto
+	}
+
+	delimitador := config.SignDelimiter
+	if delimitador == "" {
+		delimitador = "\n"
+	}
+	return "*" + nome + "*" + delimitador + texto
 }
 
 // entrega manda texto, anexos, ou os dois, e devolve o WAID da última mensagem
@@ -186,7 +219,7 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 		return Resultado{Ignorado: true, Motivo: "conversa sem telefone do contato"}, nil
 	}
 
-	waid, err := s.entrega(config.InstanceId, numero, texto, temAnexo, hook)
+	waid, err := s.entrega(config.InstanceId, numero, assina(config, hook, texto), temAnexo, hook)
 	if err != nil {
 		return Resultado{}, err
 	}

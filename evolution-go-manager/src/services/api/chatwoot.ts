@@ -16,6 +16,10 @@ export interface ChatwootConfig {
   inboxIdentifier: string;
   markAsRead: boolean;
   syncGroups: boolean;
+  /** Assina a mensagem com o nome de quem respondeu, como o Evolution faz. */
+  signMsg: boolean;
+  /** Separador entre nome e texto; vazio usa a quebra de linha. */
+  signDelimiter: string;
   /** Caminho do webhook a configurar na inbox do Chatwoot. */
   webhookUrl: string;
 }
@@ -30,6 +34,8 @@ export interface ChatwootConfigPayload {
   inboxIdentifier: string;
   markAsRead: boolean;
   syncGroups: boolean;
+  signMsg: boolean;
+  signDelimiter: string;
 }
 
 /**

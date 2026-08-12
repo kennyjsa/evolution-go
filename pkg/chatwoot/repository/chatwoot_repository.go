@@ -66,7 +66,7 @@ func (r *chatwootRepository) UpsertConfig(config chatwoot_model.ChatwootConfig) 
 		DoUpdates: clause.AssignmentColumns([]string{
 			"enabled", "url", "account_id", "account_token",
 			"inbox_id", "inbox_identifier", "hmac_token",
-			"mark_as_read", "sync_groups", "updated_at",
+			"mark_as_read", "sync_groups", "sign_msg", "sign_delimiter", "updated_at",
 		}),
 	}).Create(&config).Error
 }

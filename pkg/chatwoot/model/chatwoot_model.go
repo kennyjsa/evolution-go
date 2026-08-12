@@ -34,6 +34,13 @@ type ChatwootConfig struct {
 	MarkAsRead bool `json:"markAsRead" gorm:"default:false"`
 	SyncGroups bool `json:"syncGroups" gorm:"default:false"`
 
+	// Assina a mensagem com o nome de quem respondeu, como o Evolution faz.
+	// Numa inbox compartilhada o cliente conversa com várias pessoas da agência
+	// e, sem a assinatura, todas viram um interlocutor só.
+	SignMsg bool `json:"signMsg" gorm:"default:true"`
+	// Separador entre o nome e o texto. Vazio cai no padrão do Evolution ("\n").
+	SignDelimiter string `json:"signDelimiter"`
+
 	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime"`
 	UpdatedAt time.Time `json:"updatedAt" gorm:"autoUpdateTime"`
 }

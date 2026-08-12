@@ -20,6 +20,10 @@ type configBody struct {
 	HmacToken       string `json:"hmacToken"`
 	MarkAsRead      bool   `json:"markAsRead"`
 	SyncGroups      bool   `json:"syncGroups"`
+	// Ponteiro para distinguir "false" de ausente: a assinatura é ligada por
+	// padrão, e um corpo sem o campo não pode desligá-la em silêncio.
+	SignMsg       *bool  `json:"signMsg"`
+	SignDelimiter string `json:"signDelimiter"`
 }
 
 // RegisterConfigRoutes registra o CRUD da config. Diferente do webhook, estas
@@ -57,6 +61,8 @@ func (h *Handler) GetConfig(ctx *gin.Context) {
 		"inboxIdentifier": config.InboxIdentifier,
 		"markAsRead":      config.MarkAsRead,
 		"syncGroups":      config.SyncGroups,
+		"signMsg":         config.SignMsg,
+		"signDelimiter":   config.SignDelimiter,
 		"webhookUrl":      "/webhooks/chatwoot/" + config.WebhookToken,
 	})
 }
@@ -87,6 +93,8 @@ func (h *Handler) UpsertConfig(ctx *gin.Context) {
 		HmacToken:       body.HmacToken,
 		MarkAsRead:      body.MarkAsRead,
 		SyncGroups:      body.SyncGroups,
+		SignMsg:         body.SignMsg == nil || *body.SignMsg,
+		SignDelimiter:   body.SignDelimiter,
 	}
 	if atual != nil {
 		// Preserva o token do webhook: trocá-lo a cada salvamento quebraria a
