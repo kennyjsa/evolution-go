@@ -24,11 +24,18 @@ type chatwootClient interface {
 	ConversaAberta(sourceId string) (*Conversa, error)
 	CriaConversa(sourceId string) (*Conversa, error)
 	CriaMensagem(sourceId string, conversaId int, texto string) (*Mensagem, error)
+	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo string, conteudo []byte) (*Mensagem, error)
 }
+
+// BaixaMidia devolve o conteúdo do anexo de um evento do WhatsApp. Recebe o
+// bloco `Message` cru porque só ele carrega as chaves de descriptografia da
+// mídia; o download é feito pelo cliente conectado da instância.
+type BaixaMidia func(instanceId string, mensagemBruta []byte) ([]byte, error)
 
 type Entrada struct {
 	repo    chatwoot_repository.ChatwootRepository
 	fabrica fabricaCliente
+	baixa   BaixaMidia
 }
 
 func NewEntrada(repo chatwoot_repository.ChatwootRepository) *Entrada {
@@ -38,6 +45,44 @@ func NewEntrada(repo chatwoot_repository.ChatwootRepository) *Entrada {
 			return NewClient(config.Url, config.AccountId, config.AccountToken, config.InboxIdentifier)
 		},
 	}
+}
+
+// ComBaixadorDeMidia liga o download de anexos. Sem ele a entrada continua
+// funcionando, só que mídia vira marcador ("[imagem]") em vez do arquivo.
+func (e *Entrada) ComBaixadorDeMidia(baixa BaixaMidia) *Entrada {
+	e.baixa = baixa
+	return e
+}
+
+// criaMensagem entrega o anexo quando há mídia e cai para texto quando não há.
+//
+// Falha de download não vira erro: numa agência a foto do hotel importa, mas
+// perder a conversa inteira porque um anexo não baixou é pior — a mensagem
+// entra com o marcador e o atendente ao menos sabe que algo chegou.
+func (e *Entrada) criaMensagem(
+	cliente chatwootClient,
+	evento *Evento,
+	sourceId string,
+	conversaId int,
+	texto string,
+) (*Mensagem, error) {
+	midia := evento.TemMidia()
+	if !midia.Tem || e.baixa == nil {
+		return cliente.CriaMensagem(sourceId, conversaId, texto)
+	}
+
+	conteudo, err := e.baixa(evento.InstanceId, evento.Data.Message)
+	if err != nil || len(conteudo) == 0 {
+		return cliente.CriaMensagem(sourceId, conversaId, texto)
+	}
+
+	// A legenda vai no corpo; o marcador é só o texto de fallback de quando não
+	// há arquivo, e repeti-lo ao lado do anexo é ruído.
+	legenda := texto
+	if ehMarcador(legenda) {
+		legenda = ""
+	}
+	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, conteudo)
 }
 
 // Processa leva uma mensagem recebida do WhatsApp para a conversa do Chatwoot.
@@ -131,7 +176,7 @@ func (e *Entrada) Processa(evento *Evento) (Resultado, error) {
 		}
 	}
 
-	mensagem, err := cliente.CriaMensagem(contato.SourceId, conversa.Id, texto)
+	mensagem, err := e.criaMensagem(cliente, evento, contato.SourceId, conversa.Id, texto)
 	if err != nil {
 		return Resultado{}, err
 	}

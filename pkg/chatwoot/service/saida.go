@@ -12,12 +12,17 @@ import (
 // Só os campos usados são declarados: o payload completo é grande e muda entre
 // versões, e ler o que não usamos só criaria acoplamento.
 type WebhookChatwoot struct {
-	Event        string `json:"event"`
-	MessageType  string `json:"message_type"`
-	Content      string `json:"content"`
-	Private      bool   `json:"private"`
-	Id           int    `json:"id"`
-	SourceId     string `json:"source_id"`
+	Event       string `json:"event"`
+	MessageType string `json:"message_type"`
+	Content     string `json:"content"`
+	Private     bool   `json:"private"`
+	Id          int    `json:"id"`
+	SourceId    string `json:"source_id"`
+	Attachments []struct {
+		// file_type é a classificação do Chatwoot: image, audio, video, file.
+		FileType string `json:"file_type"`
+		DataUrl  string `json:"data_url"`
+	} `json:"attachments"`
 	Conversation struct {
 		Id   int `json:"id"`
 		Meta struct {
@@ -32,13 +37,102 @@ type WebhookChatwoot struct {
 // EnviaTexto é o que a saída precisa do serviço de envio do WhatsApp.
 type EnviaTexto func(instanceId, numero, texto string) (waid string, err error)
 
+// EnviaMidia manda um anexo pelo WhatsApp. `tipo` é o do evolution-go
+// (image, video, audio, document).
+type EnviaMidia func(instanceId, numero, tipo, legenda, arquivo string, conteudo []byte) (waid string, err error)
+
+// BaixaAnexo busca o arquivo que o agente anexou no Chatwoot e devolve o
+// conteúdo e o nome do arquivo.
+type BaixaAnexo func(url string) (conteudo []byte, arquivo string, err error)
+
 type Saida struct {
-	repo  chatwoot_repository.ChatwootRepository
-	envia EnviaTexto
+	repo       chatwoot_repository.ChatwootRepository
+	envia      EnviaTexto
+	enviaMidia EnviaMidia
+	baixa      BaixaAnexo
 }
 
 func NewSaida(repo chatwoot_repository.ChatwootRepository, envia EnviaTexto) *Saida {
 	return &Saida{repo: repo, envia: envia}
+}
+
+// ComMidia liga o envio de anexos. Sem isso a saída só manda texto, e o arquivo
+// que o agente anexou no Chatwoot nunca chega ao cliente.
+func (s *Saida) ComMidia(baixa BaixaAnexo, envia EnviaMidia) *Saida {
+	s.baixa = baixa
+	s.enviaMidia = envia
+	return s
+}
+
+// tipoDoChatwoot traduz o file_type do Chatwoot para o tipo do evolution-go.
+// O que não é reconhecido vai como documento: entregar o arquivo com o tipo
+// genérico é melhor do que não entregar.
+func tipoDoChatwoot(fileType string) string {
+	switch strings.ToLower(fileType) {
+	case "image":
+		return "image"
+	case "audio":
+		return "audio"
+	case "video":
+		return "video"
+	default:
+		return "document"
+	}
+}
+
+// entrega manda texto, anexos, ou os dois, e devolve o WAID da última mensagem
+// enviada — é ele que fecha o par contra a reentrega do webhook.
+//
+// Falha de anexo é erro de verdade, não fallback silencioso: um "segue a foto"
+// entregue sem a foto é pior para o cliente do que uma reentrega.
+func (s *Saida) entrega(
+	instanceId, numero, texto string,
+	temAnexo bool,
+	hook *WebhookChatwoot,
+) (string, error) {
+	if !temAnexo {
+		waid, err := s.envia(instanceId, numero, texto)
+		if err != nil {
+			return "", fmt.Errorf("falha ao enviar para o WhatsApp: %w", err)
+		}
+		return waid, nil
+	}
+
+	var ultimoWaid string
+	for i, anexo := range hook.Attachments {
+		if anexo.DataUrl == "" {
+			continue
+		}
+
+		conteudo, arquivo, err := s.baixa(anexo.DataUrl)
+		if err != nil {
+			return "", fmt.Errorf("falha ao baixar anexo do Chatwoot: %w", err)
+		}
+
+		// A legenda acompanha só o primeiro anexo: repeti-la em cada arquivo
+		// mandaria o mesmo texto várias vezes para o cliente.
+		legenda := ""
+		if i == 0 {
+			legenda = texto
+		}
+
+		waid, err := s.enviaMidia(instanceId, numero, tipoDoChatwoot(anexo.FileType),
+			legenda, arquivo, conteudo)
+		if err != nil {
+			return "", fmt.Errorf("falha ao enviar anexo para o WhatsApp: %w", err)
+		}
+		ultimoWaid = waid
+	}
+
+	// Anexo declarado mas sem URL utilizável: manda ao menos o texto, se houver.
+	if ultimoWaid == "" && texto != "" {
+		waid, err := s.envia(instanceId, numero, texto)
+		if err != nil {
+			return "", fmt.Errorf("falha ao enviar para o WhatsApp: %w", err)
+		}
+		return waid, nil
+	}
+	return ultimoWaid, nil
 }
 
 // Processa manda para o WhatsApp o que o agente escreveu no Chatwoot.
@@ -63,7 +157,10 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 	}
 
 	texto := strings.TrimSpace(hook.Content)
-	if texto == "" {
+	// Anexo sem legenda é o caso normal de foto de hotel e áudio de negociação;
+	// exigir texto descartaria justamente essas mensagens.
+	temAnexo := len(hook.Attachments) > 0 && s.enviaMidia != nil && s.baixa != nil
+	if texto == "" && !temAnexo {
 		return Resultado{Ignorado: true, Motivo: "mensagem sem texto"}, nil
 	}
 
@@ -89,9 +186,9 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 		return Resultado{Ignorado: true, Motivo: "conversa sem telefone do contato"}, nil
 	}
 
-	waid, err := s.envia(config.InstanceId, numero, texto)
+	waid, err := s.entrega(config.InstanceId, numero, texto, temAnexo, hook)
 	if err != nil {
-		return Resultado{}, fmt.Errorf("falha ao enviar para o WhatsApp: %w", err)
+		return Resultado{}, err
 	}
 
 	// Marcar depois do envio: marcar antes perderia a mensagem se o envio

@@ -51,17 +51,24 @@ type conteudo struct {
 		Text string `json:"text"`
 	} `json:"extendedTextMessage"`
 	ImageMessage *struct {
-		Caption string `json:"caption"`
+		Caption  string `json:"caption"`
+		Mimetype string `json:"mimetype"`
 	} `json:"imageMessage"`
 	VideoMessage *struct {
-		Caption string `json:"caption"`
+		Caption  string `json:"caption"`
+		Mimetype string `json:"mimetype"`
 	} `json:"videoMessage"`
 	DocumentMessage *struct {
 		Caption  string `json:"caption"`
 		FileName string `json:"fileName"`
+		Mimetype string `json:"mimetype"`
 	} `json:"documentMessage"`
-	AudioMessage    *struct{} `json:"audioMessage"`
-	StickerMessage  *struct{} `json:"stickerMessage"`
+	AudioMessage *struct {
+		Mimetype string `json:"mimetype"`
+	} `json:"audioMessage"`
+	StickerMessage *struct {
+		Mimetype string `json:"mimetype"`
+	} `json:"stickerMessage"`
 	LocationMessage *struct {
 		DegreesLatitude  float64 `json:"degreesLatitude"`
 		DegreesLongitude float64 `json:"degreesLongitude"`
@@ -106,6 +113,77 @@ func (e *Evento) Texto() string {
 	}
 	return ""
 }
+
+// Midia descreve o anexo de um evento. Para uma agência de viagens é conteúdo
+// principal — foto de hotel, lâmina de roteiro, áudio de negociação — e não uma
+// borda do texto.
+type Midia struct {
+	Tem      bool
+	Tipo     string // image, video, audio, document, sticker
+	Arquivo  string
+	Mimetype string
+}
+
+// TemMidia devolve o anexo do evento, se houver.
+func (e *Evento) TemMidia() Midia {
+	if len(e.Data.Message) == 0 {
+		return Midia{}
+	}
+
+	var c conteudo
+	if err := json.Unmarshal(e.Data.Message, &c); err != nil {
+		return Midia{}
+	}
+
+	switch {
+	case c.ImageMessage != nil:
+		return Midia{true, "image", nomeArquivo(e, c.ImageMessage.Mimetype, "jpg"), c.ImageMessage.Mimetype}
+	case c.VideoMessage != nil:
+		return Midia{true, "video", nomeArquivo(e, c.VideoMessage.Mimetype, "mp4"), c.VideoMessage.Mimetype}
+	case c.AudioMessage != nil:
+		return Midia{true, "audio", nomeArquivo(e, c.AudioMessage.Mimetype, "ogg"), c.AudioMessage.Mimetype}
+	case c.StickerMessage != nil:
+		return Midia{true, "sticker", nomeArquivo(e, c.StickerMessage.Mimetype, "webp"), c.StickerMessage.Mimetype}
+	case c.DocumentMessage != nil:
+		// O nome original importa: o Chatwoot mostra o anexo por ele, e um
+		// "arquivo" genérico esconde qual roteiro foi enviado ao cliente.
+		nome := strings.TrimSpace(c.DocumentMessage.FileName)
+		if nome == "" {
+			nome = nomeArquivo(e, c.DocumentMessage.Mimetype, "bin")
+		}
+		return Midia{true, "document", nome, c.DocumentMessage.Mimetype}
+	}
+	return Midia{}
+}
+
+// nomeArquivo monta um nome estável a partir do WAID: o WhatsApp não manda nome
+// para foto e áudio, e nomes repetidos viram anexos indistinguíveis na conversa.
+func nomeArquivo(e *Evento, mimetype, padrao string) string {
+	ext := padrao
+	if i := strings.Index(mimetype, "/"); i != -1 {
+		if bruta := strings.SplitN(mimetype[i+1:], ";", 2)[0]; bruta != "" {
+			ext = bruta
+		}
+	}
+
+	id := e.Data.Info.ID
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	if id == "" {
+		id = "anexo"
+	}
+	return id + "." + ext
+}
+
+// marcadores são os textos de fallback devolvidos por Texto() quando a mídia
+// não tem legenda.
+var marcadores = map[string]bool{
+	"[imagem]": true, "[vídeo]": true, "[documento]": true,
+	"[áudio]": true, "[figurinha]": true, "[localização]": true,
+}
+
+func ehMarcador(texto string) bool { return marcadores[texto] }
 
 func ouMarcador(texto, marcador string) string {
 	if strings.TrimSpace(texto) != "" {

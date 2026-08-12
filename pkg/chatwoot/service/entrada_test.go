@@ -56,6 +56,7 @@ type clienteFalso struct {
 	criouContato  bool
 	criouConversa bool
 	textos        []string
+	anexos        []anexo
 	erroMensagem  error
 }
 

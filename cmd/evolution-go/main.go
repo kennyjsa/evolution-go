@@ -27,6 +27,7 @@ import (
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
 	chatwoot_consumer "github.com/evolution-foundation/evolution-go/pkg/chatwoot/consumer"
 	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
+	chatwoot_midia "github.com/evolution-foundation/evolution-go/pkg/chatwoot/midia"
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
@@ -138,17 +139,22 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 			// O conector do Chatwoot lê do stream. Sem JetStream não há stream
 			// de onde ler, e uma mensagem publicada sem consumidor no ar some —
 			// por isso ele só sobe junto do stream durável.
+			// O baixador usa o cliente conectado da instância: a mídia do
+			// WhatsApp vem cifrada, e só ele tem as chaves para abrir.
+			baixador := chatwoot_midia.NovoBaixador(clientPointer)
 			consumidor := chatwoot_consumer.New(
-				chatwoot_service.NewEntrada(chatwoot_repository.NewChatwootRepository(db)),
+				chatwoot_service.NewEntrada(chatwoot_repository.NewChatwootRepository(db)).
+					ComBaixadorDeMidia(baixador.Baixa),
 				loggerWrapper,
 			)
 			if err := consumidor.Start(config.NatsUrl, config.NatsStreamName); err != nil {
 				// Falhar aqui não pode derrubar o evolution-go: sem o conector
 				// o WhatsApp continua funcionando, só o espelho no Chatwoot para.
 				logger.LogError("Failed to start Chatwoot consumer: %v", err)
-			} else {
-				defer consumidor.Stop()
 			}
+			// Sem `defer consumidor.Stop()`: o defer rodaria no fim de
+			// setupRouter, matando o consumidor logo depois de subir. Ele vive
+			// enquanto o processo viver, e o encerramento fecha tudo junto.
 		}
 	} else {
 		natsProducer = nats_producer.NewNatsProducer(
@@ -274,7 +280,28 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 				return "", err
 			}
 			return enviada.Info.ID, nil
-		}),
+		}).ComMidia(
+			chatwoot_midia.BaixaAnexoDoChatwoot,
+			func(instanceId, numero, tipo, legenda, arquivo string, conteudo []byte) (string, error) {
+				instance, err := instanceRepository.GetInstanceByID(instanceId)
+				if err != nil {
+					return "", err
+				}
+				if instance == nil {
+					return "", fmt.Errorf("instância %s não existe", instanceId)
+				}
+				enviada, err := sendMessageService.SendMediaFile(&send_service.MediaStruct{
+					Number:   numero,
+					Type:     tipo,
+					Caption:  legenda,
+					Filename: arquivo,
+				}, conteudo, instance)
+				if err != nil {
+					return "", err
+				}
+				return enviada.Info.ID, nil
+			},
+		),
 		loggerWrapper,
 	)
 	chatwootHandler.RegisterRoutes(r)
