@@ -258,7 +258,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// apikey); quem autentica é o token opaco no path, casado com a config da
 	// instância. Fica antes do router com middleware de auth, como o passkey.
 	chatwootRepo := chatwoot_repository.NewChatwootRepository(db)
-	chatwoot_handler.New(
+	chatwootHandler := chatwoot_handler.New(
 		chatwootRepo,
 		chatwoot_service.NewSaida(chatwootRepo, func(instanceId, numero, texto string) (string, error) {
 			instance, err := instanceRepository.GetInstanceByID(instanceId)
@@ -276,7 +276,11 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 			return enviada.Info.ID, nil
 		}),
 		loggerWrapper,
-	).RegisterRoutes(r)
+	)
+	chatwootHandler.RegisterRoutes(r)
+	// O CRUD da config mexe em credencial do Chatwoot, então fica atrás da
+	// apikey global — ao contrário do webhook, que o Chatwoot chama sem apikey.
+	chatwootHandler.RegisterConfigRoutes(r, auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
 
 	// Passkey ceremony routes — PUBLIC (called by the browser extension from the
 	// web.whatsapp.com origin, gated only by an opaque ephemeral token).
