@@ -328,6 +328,67 @@ func (c *Client) CriaMensagem(sourceId string, conversaId int, texto string) (*M
 	return &mensagem, nil
 }
 
+// ConversaAbertaDoContato devolve a conversa em aberto do contato nesta inbox,
+// ou 0 quando não há.
+//
+// Busca pelo contato, e não pelo source_id: um contato pode ter vários
+// contact_inbox na mesma inbox (a Evolution Node criava um por sessão), e a
+// conversa com o histórico pode estar em qualquer um deles. Escolher pelo
+// vínculo faria a negociação continuar numa conversa vazia ao lado da real.
+func (c *Client) ConversaAbertaDoContato(contatoId int) (int, error) {
+	endereco := c.urlConta(fmt.Sprintf("/contacts/%d/conversations", contatoId))
+	req, err := c.requisicaoJson(http.MethodGet, endereco, nil, true)
+	if err != nil {
+		return 0, err
+	}
+
+	var resposta struct {
+		Payload []struct {
+			Id             int    `json:"id"`
+			InboxId        int    `json:"inbox_id"`
+			Status         string `json:"status"`
+			LastActivityAt int64  `json:"last_activity_at"`
+		} `json:"payload"`
+	}
+	if err := c.do(req, &resposta); err != nil {
+		return 0, err
+	}
+
+	escolhida, maisRecente := 0, int64(-1)
+	for _, conversa := range resposta.Payload {
+		if c.inboxId != "" && fmt.Sprint(conversa.InboxId) != c.inboxId {
+			continue
+		}
+		if conversa.Status == "resolved" {
+			continue
+		}
+		if conversa.LastActivityAt > maisRecente {
+			escolhida, maisRecente = conversa.Id, conversa.LastActivityAt
+		}
+	}
+	return escolhida, nil
+}
+
+// CriaMensagemNaConversa publica texto numa conversa já existente, pela API de
+// conta. `incoming` mantém a mensagem atribuída ao contato: sem isso ela
+// apareceria como se a agência tivesse escrito.
+func (c *Client) CriaMensagemNaConversa(conversaId int, texto string) (*Mensagem, error) {
+	endereco := c.urlConta(fmt.Sprintf("/conversations/%d/messages", conversaId))
+	req, err := c.requisicaoJson(http.MethodPost, endereco, map[string]any{
+		"content":      texto,
+		"message_type": "incoming",
+	}, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var mensagem Mensagem
+	if err := c.do(req, &mensagem); err != nil {
+		return nil, err
+	}
+	return &mensagem, nil
+}
+
 // CriaMensagemComAnexo sobe mídia (áudio, imagem, documento) pela API de conta:
 // a API pública não aceita anexo, e é justamente a mídia que o roteiro de
 // recuperação por SQL nunca conseguiu resgatar.

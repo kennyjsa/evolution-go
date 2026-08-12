@@ -51,15 +51,17 @@ func (r *repoFalso) RegistraLid(lid, telefone string) error {
 func (r *repoFalso) TelefoneDoLid(lid string) (string, error) { return r.lids[lid], nil }
 
 type clienteFalso struct {
-	contato       *Contato
-	conversa      *Conversa
-	criouContato  bool
-	criouConversa bool
-	textos        []string
-	anexos        []anexo
-	sourceId      string
-	criouVinculo  bool
-	erroMensagem  error
+	contato            *Contato
+	conversa           *Conversa
+	criouContato       bool
+	criouConversa      bool
+	textos             []string
+	anexos             []anexo
+	sourceId           string
+	criouVinculo       bool
+	conversaDoContato  int
+	postadasNaConversa []string
+	erroMensagem       error
 }
 
 func (c *clienteFalso) BuscaContato(string) (*Contato, error) { return c.contato, nil }
@@ -69,6 +71,16 @@ func (c *clienteFalso) CriaContato(identifier, nome string) (*Contato, error) {
 	return c.contato, nil
 }
 func (c *clienteFalso) SourceIdDaInbox(int) (string, error) { return c.sourceId, nil }
+func (c *clienteFalso) ConversaAbertaDoContato(int) (int, error) {
+	return c.conversaDoContato, nil
+}
+func (c *clienteFalso) CriaMensagemNaConversa(_ int, texto string) (*Mensagem, error) {
+	if c.erroMensagem != nil {
+		return nil, c.erroMensagem
+	}
+	c.postadasNaConversa = append(c.postadasNaConversa, texto)
+	return &Mensagem{Id: 558}, nil
+}
 func (c *clienteFalso) CriaVinculoInbox(int) (string, error) {
 	c.criouVinculo = true
 	c.sourceId = "src-novo"

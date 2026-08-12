@@ -83,3 +83,51 @@ func TestEntradaCriaContatoQuandoNaoExiste(t *testing.T) {
 		t.Errorf("não criou contato inexistente")
 	}
 }
+
+// Um contato pode ter vários contact_inbox na mesma inbox (a Evolution Node
+// criava um por sessão): escolher pelo vínculo jogaria a mensagem numa conversa
+// vazia ao lado da que tem o histórico da negociação.
+func TestEntradaUsaConversaAbertaDoContato(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{
+		contato:           &Contato{Id: 657, Identifier: "5511999999999"},
+		conversaDoContato: 233,
+		sourceId:          "vinculo-sem-conversa",
+	}
+
+	if _, err := monta(repo, cliente).Processa(evento(t, infoPadrao(), map[string]any{
+		"conversation": "quanto ficou o pacote?",
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if len(cliente.postadasNaConversa) != 1 {
+		t.Fatalf("não postou na conversa existente: %+v", cliente.postadasNaConversa)
+	}
+	if cliente.criouConversa {
+		t.Errorf("abriu conversa nova tendo uma aberta")
+	}
+	if len(repo.marcadas) != 1 || repo.marcadas[0].ChatwootConversaId != 233 {
+		t.Errorf("conversa registrada errada: %+v", repo.marcadas)
+	}
+}
+
+// Sem conversa aberta, o vínculo existente é o caminho — e ainda assim sem
+// criar contato novo.
+func TestEntradaAbreConversaNoVinculoExistente(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{
+		contato:           &Contato{Id: 322, Identifier: "5511999999999"},
+		conversaDoContato: 0,
+		sourceId:          "src-existente",
+	}
+
+	if _, err := monta(repo, cliente).Processa(evento(t, infoPadrao(), map[string]any{
+		"conversation": "oi",
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if !cliente.criouConversa {
+		t.Errorf("não abriu conversa para contato sem conversa aberta")
+	}
+	if cliente.criouContato || cliente.criouVinculo {
+		t.Errorf("criou contato ou vínculo desnecessário")
+	}
+}
