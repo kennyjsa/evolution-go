@@ -57,6 +57,8 @@ type clienteFalso struct {
 	criouConversa bool
 	textos        []string
 	anexos        []anexo
+	sourceId      string
+	criouVinculo  bool
 	erroMensagem  error
 }
 
@@ -65,6 +67,12 @@ func (c *clienteFalso) CriaContato(identifier, nome string) (*Contato, error) {
 	c.criouContato = true
 	c.contato = &Contato{Id: 1, SourceId: "src-1", Identifier: identifier, Name: nome}
 	return c.contato, nil
+}
+func (c *clienteFalso) SourceIdDaInbox(int) (string, error) { return c.sourceId, nil }
+func (c *clienteFalso) CriaVinculoInbox(int) (string, error) {
+	c.criouVinculo = true
+	c.sourceId = "src-novo"
+	return c.sourceId, nil
 }
 func (c *clienteFalso) ConversaAberta(string) (*Conversa, error) { return c.conversa, nil }
 func (c *clienteFalso) CriaConversa(string) (*Conversa, error) {

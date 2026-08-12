@@ -56,7 +56,7 @@ func NewRecibo(repo chatwoot_repository.ChatwootRepository) *Recibo {
 	return &Recibo{
 		repo: repo,
 		fabrica: func(config *chatwoot_model.ChatwootConfig) clienteStatus {
-			return NewClient(config.Url, config.AccountId, config.AccountToken, config.InboxIdentifier)
+			return NewClient(config.Url, config.AccountId, config.AccountToken, config.InboxId, config.InboxIdentifier)
 		},
 	}
 }

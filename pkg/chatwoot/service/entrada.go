@@ -25,6 +25,8 @@ type chatwootClient interface {
 	CriaConversa(sourceId string) (*Conversa, error)
 	CriaMensagem(sourceId string, conversaId int, texto string) (*Mensagem, error)
 	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype string, conteudo []byte) (*Mensagem, error)
+	SourceIdDaInbox(contatoId int) (string, error)
+	CriaVinculoInbox(contatoId int) (string, error)
 }
 
 // BaixaMidia devolve o conteúdo do anexo de um evento do WhatsApp. Recebe o
@@ -47,7 +49,7 @@ func NewEntrada(repo chatwoot_repository.ChatwootRepository) *Entrada {
 	return &Entrada{
 		repo: repo,
 		fabrica: func(config *chatwoot_model.ChatwootConfig) chatwootClient {
-			return NewClient(config.Url, config.AccountId, config.AccountToken, config.InboxIdentifier)
+			return NewClient(config.Url, config.AccountId, config.AccountToken, config.InboxId, config.InboxIdentifier)
 		},
 	}
 }
@@ -95,6 +97,50 @@ func (e *Entrada) criaMensagem(
 		legenda = ""
 	}
 	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, midia.Mimetype, conteudo)
+}
+
+// resolveSourceId devolve o id que liga o contato a esta inbox, reaproveitando
+// o vínculo que já existe.
+//
+// A API pública de contatos cria um contact_inbox novo a cada chamada, e o
+// Chatwoot abre uma conversa por contact_inbox: usá-la para contato existente
+// espalha a negociação do cliente em uma conversa por mensagem.
+func (e *Entrada) resolveSourceId(cliente chatwootClient, telefone, nome string) (string, error) {
+	contato, err := cliente.BuscaContato(telefone)
+	if err != nil {
+		return "", err
+	}
+
+	if contato == nil {
+		// Contato inexistente: aí sim a API pública serve, porque ela cria o
+		// contato e o vínculo de uma vez.
+		novo, err := cliente.CriaContato(telefone, nome)
+		if err != nil {
+			return "", err
+		}
+		if novo == nil || novo.SourceId == "" {
+			return "", fmt.Errorf("chatwoot devolveu contato sem source_id")
+		}
+		return novo.SourceId, nil
+	}
+
+	sourceId, err := cliente.SourceIdDaInbox(contato.Id)
+	if err != nil {
+		return "", err
+	}
+	if sourceId != "" {
+		return sourceId, nil
+	}
+
+	// Contato existe mas nunca falou por esta inbox.
+	sourceId, err = cliente.CriaVinculoInbox(contato.Id)
+	if err != nil {
+		return "", err
+	}
+	if sourceId == "" {
+		return "", fmt.Errorf("chatwoot nao devolveu source_id ao vincular a inbox")
+	}
+	return sourceId, nil
 }
 
 // Processa leva uma mensagem recebida do WhatsApp para a conversa do Chatwoot.
@@ -163,32 +209,23 @@ func (e *Entrada) Processa(evento *Evento) (Resultado, error) {
 
 	cliente := e.fabrica(config)
 
-	contato, err := cliente.BuscaContato(telefone)
+	sourceId, err := e.resolveSourceId(cliente, telefone, evento.Data.Info.PushName)
 	if err != nil {
 		return Resultado{}, err
 	}
-	if contato == nil {
-		contato, err = cliente.CriaContato(telefone, evento.Data.Info.PushName)
-		if err != nil {
-			return Resultado{}, err
-		}
-	}
-	if contato == nil || contato.SourceId == "" {
-		return Resultado{}, fmt.Errorf("chatwoot devolveu contato sem source_id")
-	}
 
-	conversa, err := cliente.ConversaAberta(contato.SourceId)
+	conversa, err := cliente.ConversaAberta(sourceId)
 	if err != nil {
 		return Resultado{}, err
 	}
 	if conversa == nil {
-		conversa, err = cliente.CriaConversa(contato.SourceId)
+		conversa, err = cliente.CriaConversa(sourceId)
 		if err != nil {
 			return Resultado{}, err
 		}
 	}
 
-	mensagem, err := e.criaMensagem(cliente, evento, contato.SourceId, conversa.Id, texto)
+	mensagem, err := e.criaMensagem(cliente, evento, sourceId, conversa.Id, texto)
 	if err != nil {
 		return Resultado{}, err
 	}

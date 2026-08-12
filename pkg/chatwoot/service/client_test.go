@@ -17,10 +17,10 @@ func servidor(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server
 	t.Cleanup(srv.Close)
 	// Barra sobrando na URL é o que o usuário digita na tela de configuração;
 	// o cliente tem que tolerar sem gerar "//api/v1".
-	return NewClient(srv.URL+"/", "7", "token-da-conta", "ident-inbox"), srv
+	return NewClient(srv.URL+"/", "7", "token-da-conta", "1", "ident-inbox"), srv
 }
 
-func TestBuscaContatoCasaSoOIdentifierExato(t *testing.T) {
+func TestBuscaContatoEscolheOTelefoneCerto(t *testing.T) {
 	cliente, _ := servidor(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/accounts/7/contacts/search" {
 			t.Errorf("caminho inesperado: %s", r.URL.Path)
@@ -213,5 +213,66 @@ func TestErroCarregaCorpoDaResposta(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "Inbox not found") {
 		t.Errorf("erro sem causa: %v", err)
+	}
+}
+
+// O contato criado pela Evolution Node guarda `<numero>@s.whatsapp.net` no
+// identifier. Exigir igualdade com o telefone puro fazia a busca falhar e o
+// conector criar um contact_inbox novo a cada mensagem — uma conversa por
+// mensagem na tela do agente.
+func TestBuscaContatoCasaIdentifierNoFormatoDaEvolution(t *testing.T) {
+	cliente, _ := servidor(t, func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"payload": []map[string]any{
+			{"id": 322, "identifier": "556581607338@s.whatsapp.net",
+				"phone_number": "+556581607338"},
+		}})
+	})
+
+	contato, err := cliente.BuscaContato("556581607338")
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if contato == nil || contato.Id != 322 {
+		t.Fatalf("contato da Evolution não foi reconhecido: %+v", contato)
+	}
+}
+
+// O source_id do vínculo existente é o que mantém a conversa única.
+func TestSourceIdDaInboxUsaOVinculoDaInboxConfigurada(t *testing.T) {
+	cliente, _ := servidor(t, func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"payload": map[string]any{
+			"contact_inboxes": []map[string]any{
+				{"source_id": "de-outra-inbox", "inbox": map[string]any{"id": 9}},
+				{"source_id": "desta-inbox", "inbox": map[string]any{"id": 1}},
+			},
+		}})
+	})
+
+	sourceId, err := cliente.SourceIdDaInbox(322)
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if sourceId != "desta-inbox" {
+		t.Errorf("source_id errado: %q", sourceId)
+	}
+}
+
+// Sem vínculo nesta inbox o conector precisa saber disso para criar o vínculo,
+// em vez de mandar a mensagem para a inbox errada.
+func TestSourceIdDaInboxVazioQuandoNaoHaVinculo(t *testing.T) {
+	cliente, _ := servidor(t, func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"payload": map[string]any{
+			"contact_inboxes": []map[string]any{
+				{"source_id": "de-outra-inbox", "inbox": map[string]any{"id": 9}},
+			},
+		}})
+	})
+
+	sourceId, err := cliente.SourceIdDaInbox(322)
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if sourceId != "" {
+		t.Errorf("source_id de outra inbox foi aceito: %q", sourceId)
 	}
 }

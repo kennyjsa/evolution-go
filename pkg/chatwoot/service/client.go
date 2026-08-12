@@ -24,25 +24,30 @@ type Client struct {
 	baseUrl         string
 	accountId       string
 	accountToken    string
+	inboxId         string
 	inboxIdentifier string
 	http            *http.Client
 }
 
-func NewClient(baseUrl, accountId, accountToken, inboxIdentifier string) *Client {
+func NewClient(baseUrl, accountId, accountToken, inboxId, inboxIdentifier string) *Client {
 	return &Client{
 		baseUrl:         strings.TrimRight(baseUrl, "/"),
 		accountId:       accountId,
 		accountToken:    accountToken,
+		inboxId:         inboxId,
 		inboxIdentifier: inboxIdentifier,
 		http:            &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 type Contato struct {
-	Id         int    `json:"id"`
-	SourceId   string `json:"source_id"`
-	Identifier string `json:"identifier"`
-	Name       string `json:"name"`
+	Id       int    `json:"id"`
+	SourceId string `json:"source_id"`
+	// A API de conta devolve o identifier como veio de quem criou o contato: a
+	// Evolution Node grava o JID inteiro, o conector grava só o telefone.
+	Identifier  string `json:"identifier"`
+	PhoneNumber string `json:"phone_number"`
+	Name        string `json:"name"`
 }
 
 type Conversa struct {
@@ -151,15 +156,92 @@ func (c *Client) BuscaContato(identifier string) (*Contato, error) {
 		return nil, err
 	}
 
-	// A busca é textual e casa por prefixo: só o identifier idêntico é o
-	// contato certo, senão "5511" traria qualquer número de São Paulo.
+	// A busca é textual e casa por prefixo: aceitar qualquer resultado faria
+	// "5511" trazer qualquer número de São Paulo. Mas exigir o identifier
+	// idêntico também não serve: o contato criado pela Evolution Node guarda
+	// `<numero>@s.whatsapp.net`, e o telefone puro nunca casaria — foi assim que
+	// cada mensagem virou um contact_inbox novo, e portanto uma conversa nova.
 	for _, contato := range resposta.Payload {
-		if contato.Identifier == identifier {
+		if ehOMesmoContato(contato, identifier) {
 			achado := contato
 			return &achado, nil
 		}
 	}
 	return nil, nil
+}
+
+// ehOMesmoContato aceita as formas com que o telefone aparece no Chatwoot: o
+// identifier puro, o identifier no formato JID da Evolution Node e o
+// phone_number em E.164.
+func ehOMesmoContato(contato Contato, identifier string) bool {
+	if contato.Identifier == identifier ||
+		contato.Identifier == identifier+"@s.whatsapp.net" {
+		return true
+	}
+	if i := strings.Index(contato.Identifier, "@"); i > 0 &&
+		contato.Identifier[:i] == identifier {
+		return true
+	}
+	return strings.TrimPrefix(contato.PhoneNumber, "+") == identifier
+}
+
+// SourceIdDaInbox devolve o source_id que liga o contato a esta inbox, ou vazio
+// quando o vínculo ainda não existe.
+//
+// É esse id que amarra a conversa: pedir um novo a cada mensagem cria um
+// contact_inbox por mensagem, e o Chatwoot abre uma conversa para cada um.
+func (c *Client) SourceIdDaInbox(contatoId int) (string, error) {
+	endereco := c.urlConta(fmt.Sprintf("/contacts/%d", contatoId))
+	req, err := c.requisicaoJson(http.MethodGet, endereco, nil, true)
+	if err != nil {
+		return "", err
+	}
+
+	var resposta struct {
+		Payload struct {
+			ContactInboxes []struct {
+				SourceId string `json:"source_id"`
+				Inbox    struct {
+					Id int `json:"id"`
+				} `json:"inbox"`
+			} `json:"contact_inboxes"`
+		} `json:"payload"`
+	}
+	if err := c.do(req, &resposta); err != nil {
+		return "", err
+	}
+
+	for _, vinculo := range resposta.Payload.ContactInboxes {
+		if c.inboxId == "" || fmt.Sprint(vinculo.Inbox.Id) == c.inboxId {
+			return vinculo.SourceId, nil
+		}
+	}
+	return "", nil
+}
+
+// CriaVinculoInbox liga um contato existente a esta inbox, sem criar um contato
+// novo — o que aconteceria ao chamar a API pública de contatos.
+func (c *Client) CriaVinculoInbox(contatoId int) (string, error) {
+	endereco := c.urlConta(fmt.Sprintf("/contacts/%d/contact_inboxes", contatoId))
+	req, err := c.requisicaoJson(http.MethodPost, endereco,
+		map[string]any{"inbox_id": c.inboxId}, true)
+	if err != nil {
+		return "", err
+	}
+
+	var resposta struct {
+		SourceId string `json:"source_id"`
+		Payload  struct {
+			SourceId string `json:"source_id"`
+		} `json:"payload"`
+	}
+	if err := c.do(req, &resposta); err != nil {
+		return "", err
+	}
+	if resposta.SourceId != "" {
+		return resposta.SourceId, nil
+	}
+	return resposta.Payload.SourceId, nil
 }
 
 // CriaContato registra o contato na inbox e devolve o `source_id`, que é o que
