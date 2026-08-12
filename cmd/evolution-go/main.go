@@ -26,6 +26,7 @@ import (
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
 	chatwoot_consumer "github.com/evolution-foundation/evolution-go/pkg/chatwoot/consumer"
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
@@ -252,6 +253,30 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 
 	// License routes (always accessible, even without license)
 	core.LicenseRoutes(r, runtimeCtx)
+
+	// Rota do webhook do Chatwoot — PÚBLICA por natureza (o Chatwoot não manda
+	// apikey); quem autentica é o token opaco no path, casado com a config da
+	// instância. Fica antes do router com middleware de auth, como o passkey.
+	chatwootRepo := chatwoot_repository.NewChatwootRepository(db)
+	chatwoot_handler.New(
+		chatwootRepo,
+		chatwoot_service.NewSaida(chatwootRepo, func(instanceId, numero, texto string) (string, error) {
+			instance, err := instanceRepository.GetInstanceByID(instanceId)
+			if err != nil {
+				return "", err
+			}
+			if instance == nil {
+				return "", fmt.Errorf("instância %s não existe", instanceId)
+			}
+			enviada, err := sendMessageService.SendText(
+				&send_service.TextStruct{Number: numero, Text: texto}, instance)
+			if err != nil {
+				return "", err
+			}
+			return enviada.Info.ID, nil
+		}),
+		loggerWrapper,
+	).RegisterRoutes(r)
 
 	// Passkey ceremony routes — PUBLIC (called by the browser extension from the
 	// web.whatsapp.com origin, gated only by an opaque ephemeral token).
