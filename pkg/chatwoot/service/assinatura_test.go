@@ -1,6 +1,7 @@
 package chatwoot_service
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,12 +13,16 @@ func hookAssinado(texto, nome, apelido string) *WebhookChatwoot {
 	h.Sender.Id = 1
 	h.Sender.Name = nome
 	h.Sender.Type = "user"
-	if apelido != "" {
-		h.Conversation.Meta.Assignee.Id = 1
-		h.Conversation.Meta.Assignee.Name = nome
-		h.Conversation.Meta.Assignee.AvailableName = apelido
-	}
+	_ = apelido
 	return h
+}
+
+// comApelidos liga a consulta de nomes de exibição sem falar com o Chatwoot.
+func comApelidos(s *Saida, nomes map[int]string, erro error) *Saida {
+	return s.ComNomesDeExibicao(
+		func(*chatwoot_model.ChatwootConfig) (map[int]string, error) {
+			return nomes, erro
+		})
 }
 
 func configComAssinatura() *chatwoot_model.ChatwootConfig {
@@ -48,6 +53,7 @@ func TestSaidaAssinaComNomeDoAgente(t *testing.T) {
 func TestSaidaPrefereApelidoDoAgente(t *testing.T) {
 	repo := novoRepo()
 	s, enviados := saidaDeTeste(repo, "WAID1", nil)
+	s = comApelidos(s, map[int]string{1: "Emilly"}, nil)
 
 	if _, err := s.Processa(configComAssinatura(),
 		hookAssinado("oi", "Emilly Galeno", "Emilly")); err != nil {
@@ -117,16 +123,14 @@ func TestSaidaAssinaLegendaDoAnexo(t *testing.T) {
 // O nome de exibição ("Josieli Sanches") é o que o cliente reconhece; o nome
 // completo do cadastro não. O sender da mensagem só traz o completo, então o
 // apelido tem que vir do assignee da conversa.
-func TestSaidaAssinaComNomeDeExibicaoDoAssignee(t *testing.T) {
+func TestSaidaAssinaComNomeDeExibicao(t *testing.T) {
 	repo := novoRepo()
 	s, enviados := saidaDeTeste(repo, "WAID1", nil)
+	s = comApelidos(s, map[int]string{1: "Josieli Sanches"}, nil)
 
 	h := hookDoAgente("olá")
 	h.Sender.Id = 1
 	h.Sender.Name = "Josieli Arante Sanches"
-	h.Conversation.Meta.Assignee.Id = 1
-	h.Conversation.Meta.Assignee.Name = "Josieli Arante Sanches"
-	h.Conversation.Meta.Assignee.AvailableName = "Josieli Sanches"
 
 	if _, err := s.Processa(configComAssinatura(), h); err != nil {
 		t.Fatalf("erro inesperado: %v", err)
@@ -136,22 +140,36 @@ func TestSaidaAssinaComNomeDeExibicaoDoAssignee(t *testing.T) {
 	}
 }
 
-// Quem responde nem sempre é o responsável pela conversa; assinar com o nome do
-// outro agente seria pior que usar o nome completo de quem escreveu.
-func TestSaidaNaoUsaApelidoDeOutroAgente(t *testing.T) {
+// A assinatura é de quem escreveu, não de quem é responsável pela conversa.
+func TestSaidaAssinaComQuemEscreveu(t *testing.T) {
 	repo := novoRepo()
 	s, enviados := saidaDeTeste(repo, "WAID1", nil)
+	s = comApelidos(s, map[int]string{1: "Josieli Sanches", 2: "Emilly"}, nil)
 
 	h := hookDoAgente("olá")
 	h.Sender.Id = 2
 	h.Sender.Name = "Emilly Galeno"
-	h.Conversation.Meta.Assignee.Id = 1
-	h.Conversation.Meta.Assignee.AvailableName = "Josieli Sanches"
 
 	if _, err := s.Processa(configComAssinatura(), h); err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
-	if (*enviados)[0].texto != "*Emilly Galeno:*\nolá" {
+	if (*enviados)[0].texto != "*Emilly:*\nolá" {
 		t.Errorf("assinou com o agente errado: %q", (*enviados)[0].texto)
+	}
+}
+
+// A API do Chatwoot piscar não pode derrubar a resposta do agente: cai para o
+// nome completo do payload, que é pior que o apelido mas melhor que nada.
+func TestSaidaCaiParaNomeDoPayloadSeConsultaFalha(t *testing.T) {
+	repo := novoRepo()
+	s, enviados := saidaDeTeste(repo, "WAID1", nil)
+	s = comApelidos(s, nil, errors.New("chatwoot fora"))
+
+	if _, err := s.Processa(configComAssinatura(),
+		hookAssinado("olá", "Josieli Arante Sanches", "")); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if (*enviados)[0].texto != "*Josieli Arante Sanches:*\nolá" {
+		t.Errorf("fallback errado: %q", (*enviados)[0].texto)
 	}
 }

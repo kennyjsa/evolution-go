@@ -40,14 +40,6 @@ type WebhookChatwoot struct {
 				Identifier  string `json:"identifier"`
 				PhoneNumber string `json:"phone_number"`
 			} `json:"sender"`
-			// O assignee vem pelo push_event_data, que — ao contrário do
-			// webhook_data do sender — carrega o available_name, isto é, o
-			// "Nome para exibição" configurado pelo agente.
-			Assignee struct {
-				Id            int    `json:"id"`
-				Name          string `json:"name"`
-				AvailableName string `json:"available_name"`
-			} `json:"assignee"`
 		} `json:"meta"`
 	} `json:"conversation"`
 }
@@ -67,12 +59,16 @@ type BaixaAnexo func(url string) (conteudo []byte, arquivo string, err error)
 // composing ou paused.
 type EnviaPresenca func(instanceId, numero, estado string) error
 
+// BuscaNomesDeExibicao devolve os apelidos dos agentes por id.
+type BuscaNomesDeExibicao func(config *chatwoot_model.ChatwootConfig) (map[int]string, error)
+
 type Saida struct {
-	repo          chatwoot_repository.ChatwootRepository
-	envia         EnviaTexto
-	enviaMidia    EnviaMidia
-	baixa         BaixaAnexo
-	enviaPresenca EnviaPresenca
+	nomesDeExibicao BuscaNomesDeExibicao
+	repo            chatwoot_repository.ChatwootRepository
+	envia           EnviaTexto
+	enviaMidia      EnviaMidia
+	baixa           BaixaAnexo
+	enviaPresenca   EnviaPresenca
 }
 
 func NewSaida(repo chatwoot_repository.ChatwootRepository, envia EnviaTexto) *Saida {
@@ -84,6 +80,12 @@ func NewSaida(repo chatwoot_repository.ChatwootRepository, envia EnviaTexto) *Sa
 func (s *Saida) ComMidia(baixa BaixaAnexo, envia EnviaMidia) *Saida {
 	s.baixa = baixa
 	s.enviaMidia = envia
+	return s
+}
+
+// ComNomesDeExibicao liga a consulta do apelido do agente.
+func (s *Saida) ComNomesDeExibicao(busca BuscaNomesDeExibicao) *Saida {
+	s.nomesDeExibicao = busca
 	return s
 }
 
@@ -157,12 +159,12 @@ func tipoDoChatwoot(fileType string) string {
 // O negrito é o mesmo do WhatsApp (*nome*): numa inbox compartilhada o cliente
 // fala com várias pessoas da agência, e sem a assinatura todas viram um
 // interlocutor só.
-func assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto string) string {
+func (s *Saida) assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto string) string {
 	if !config.SignMsg || texto == "" {
 		return texto
 	}
 
-	nome := nomeDeQuemRespondeu(hook)
+	nome := s.nomeDeQuemRespondeu(config, hook)
 	// Sem nome não há o que assinar — e "**: texto" seria pior que texto puro.
 	if nome == "" {
 		return texto
@@ -177,22 +179,18 @@ func assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto 
 	return "*" + nome + ":*" + delimitador + texto
 }
 
-// nomeDeQuemRespondeu prefere o "Nome para exibição" do agente.
+// nomeDeQuemRespondeu devolve o "Nome para exibição" de quem escreveu.
 //
-// O sender da mensagem só traz o nome completo (o webhook_data do usuário no
-// Chatwoot não inclui available_name), mas o assignee da conversa vem pelo
-// push_event_data e carrega o apelido — e é ele quem o cliente reconhece.
-func nomeDeQuemRespondeu(hook *WebhookChatwoot) string {
-	assignee := hook.Conversation.Meta.Assignee
-
-	// Só vale quando quem respondeu é o próprio responsável pela conversa;
-	// senão a mensagem sairia assinada com o nome de outra pessoa.
-	if assignee.Id != 0 && (hook.Sender.Id == 0 || assignee.Id == hook.Sender.Id) {
-		if nome := strings.TrimSpace(assignee.AvailableName); nome != "" {
-			return nome
-		}
-		if nome := strings.TrimSpace(assignee.Name); nome != "" {
-			return nome
+// O webhook manda só o nome completo do cadastro; o apelido que o cliente
+// reconhece está na API de agentes. Falha na consulta cai para o nome do
+// payload: assinar com o nome completo é pior que não assinar, mas muito
+// melhor que derrubar a resposta do agente.
+func (s *Saida) nomeDeQuemRespondeu(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot) string {
+	if s.nomesDeExibicao != nil && hook.Sender.Id != 0 {
+		if nomes, err := s.nomesDeExibicao(config); err == nil {
+			if nome := strings.TrimSpace(nomes[hook.Sender.Id]); nome != "" {
+				return nome
+			}
 		}
 	}
 	return strings.TrimSpace(hook.Sender.Name)
@@ -303,7 +301,7 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 		return Resultado{Ignorado: true, Motivo: "conversa sem telefone do contato"}, nil
 	}
 
-	waid, err := s.entrega(config.InstanceId, numero, assina(config, hook, texto), temAnexo, hook)
+	waid, err := s.entrega(config.InstanceId, numero, s.assina(config, hook, texto), temAnexo, hook)
 	if err != nil {
 		return Resultado{}, err
 	}

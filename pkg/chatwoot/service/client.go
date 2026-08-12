@@ -118,6 +118,36 @@ func escapaAspas(nome string) string {
 	return strings.ReplaceAll(nome, `"`, "")
 }
 
+// NomesDeExibicao devolve o "Nome para exibição" de cada agente, por id.
+//
+// O webhook não carrega esse campo (User#webhook_data só tem id, name e
+// email), então o apelido que o cliente reconhece só existe aqui.
+func (c *Client) NomesDeExibicao() (map[int]string, error) {
+	req, err := c.requisicaoJson(http.MethodGet, c.urlConta("/agents"), nil, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var agentes []struct {
+		Id            int    `json:"id"`
+		Name          string `json:"name"`
+		AvailableName string `json:"available_name"`
+	}
+	if err := c.do(req, &agentes); err != nil {
+		return nil, err
+	}
+
+	nomes := make(map[int]string, len(agentes))
+	for _, agente := range agentes {
+		if agente.AvailableName != "" {
+			nomes[agente.Id] = agente.AvailableName
+		} else {
+			nomes[agente.Id] = agente.Name
+		}
+	}
+	return nomes, nil
+}
+
 // AtualizaStatus reflete no Chatwoot o recibo do WhatsApp (entregue/lido).
 //
 // O próprio Chatwoot recusa a transição de `read` de volta para `delivered`,

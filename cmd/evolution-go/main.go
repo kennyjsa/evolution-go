@@ -340,7 +340,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 				State:  estado,
 			}, instance)
 			return err
-		}),
+		}).ComNomesDeExibicao(chatwoot_service.NovoCacheDeNomes().Nomes),
 		loggerWrapper,
 	)
 	chatwootHandler.RegisterRoutes(r)
