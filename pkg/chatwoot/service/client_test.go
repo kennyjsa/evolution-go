@@ -150,6 +150,7 @@ func TestCriaMensagemUsaCaminhoDaConversa(t *testing.T) {
 
 func TestCriaMensagemComAnexoMandaMultipartIncoming(t *testing.T) {
 	var campos map[string]string
+	var tipoDoAnexo string
 	var arquivo []byte
 	cliente, _ := servidor(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/accounts/7/conversations/11/messages" {
@@ -168,13 +169,15 @@ func TestCriaMensagemComAnexoMandaMultipartIncoming(t *testing.T) {
 		for k, v := range form.Value {
 			campos[k] = v[0]
 		}
-		f, _ := form.File["attachments[]"][0].Open()
+		parte := form.File["attachments[]"][0]
+		tipoDoAnexo = parte.Header.Get("Content-Type")
+		f, _ := parte.Open()
 		defer f.Close()
 		arquivo, _ = io.ReadAll(f)
 		json.NewEncoder(w).Encode(map[string]any{"id": 777})
 	})
 
-	mensagem, err := cliente.CriaMensagemComAnexo(11, "áudio", "audio.ogg", []byte("bytes-do-audio"))
+	mensagem, err := cliente.CriaMensagemComAnexo(11, "áudio", "audio.ogg", "audio/ogg; codecs=opus", []byte("bytes-do-audio"))
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
@@ -188,6 +191,11 @@ func TestCriaMensagemComAnexoMandaMultipartIncoming(t *testing.T) {
 	}
 	if string(arquivo) != "bytes-do-audio" {
 		t.Errorf("conteúdo do anexo errado: %q", arquivo)
+	}
+	// O Chatwoot decide entre imagem, áudio e "arquivo para baixar" por este
+	// cabeçalho; octet-stream faria a foto do hotel virar anexo genérico.
+	if tipoDoAnexo != "audio/ogg; codecs=opus" {
+		t.Errorf("content-type da parte errado: %q", tipoDoAnexo)
 	}
 }
 
