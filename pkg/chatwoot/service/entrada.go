@@ -23,12 +23,12 @@ type chatwootClient interface {
 	CriaContato(identifier, nome string) (*Contato, error)
 	ConversaAberta(sourceId string) (*Conversa, error)
 	CriaConversa(sourceId string) (*Conversa, error)
-	CriaMensagem(sourceId string, conversaId int, texto string) (*Mensagem, error)
-	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype string, conteudo []byte) (*Mensagem, error)
+	CriaMensagem(sourceId string, conversaId int, texto, waid string) (*Mensagem, error)
+	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype, waid string, conteudo []byte) (*Mensagem, error)
 	SourceIdDaInbox(contatoId int) (string, error)
 	CriaVinculoInbox(contatoId int) (string, error)
 	ConversaAbertaDoContato(contatoId int) (int, error)
-	CriaMensagemNaConversa(conversaId int, texto string) (*Mensagem, error)
+	CriaMensagemNaConversa(conversaId int, texto, waid string) (*Mensagem, error)
 }
 
 // BaixaMidia devolve o conteúdo do anexo de um evento do WhatsApp. Recebe o
@@ -87,17 +87,17 @@ func (e *Entrada) criaMensagem(
 		// Sem source_id a conversa veio da busca por contato, e só a API de
 		// conta sabe postar nela.
 		if sourceId == "" {
-			return cliente.CriaMensagemNaConversa(conversaId, texto)
+			return cliente.CriaMensagemNaConversa(conversaId, texto, evento.Data.Info.ID)
 		}
-		return cliente.CriaMensagem(sourceId, conversaId, texto)
+		return cliente.CriaMensagem(sourceId, conversaId, texto, evento.Data.Info.ID)
 	}
 
 	conteudo, err := e.baixa(evento.InstanceId, evento.Data.Message)
 	if err != nil || len(conteudo) == 0 {
 		if sourceId == "" {
-			return cliente.CriaMensagemNaConversa(conversaId, texto)
+			return cliente.CriaMensagemNaConversa(conversaId, texto, evento.Data.Info.ID)
 		}
-		return cliente.CriaMensagem(sourceId, conversaId, texto)
+		return cliente.CriaMensagem(sourceId, conversaId, texto, evento.Data.Info.ID)
 	}
 
 	// A legenda vai no corpo; o marcador é só o texto de fallback de quando não
@@ -106,7 +106,7 @@ func (e *Entrada) criaMensagem(
 	if ehMarcador(legenda) {
 		legenda = ""
 	}
-	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, midia.Mimetype, conteudo)
+	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, midia.Mimetype, evento.Data.Info.ID, conteudo)
 }
 
 // resolveConversa decide em que conversa a mensagem entra.

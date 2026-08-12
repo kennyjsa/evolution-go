@@ -310,12 +310,13 @@ func (c *Client) CriaConversa(sourceId string) (*Conversa, error) {
 
 // CriaMensagem publica a mensagem recebida do WhatsApp como `incoming`, ou
 // seja, vinda do contato.
-func (c *Client) CriaMensagem(sourceId string, conversaId int, texto string) (*Mensagem, error) {
+func (c *Client) CriaMensagem(sourceId string, conversaId int, texto, waid string) (*Mensagem, error) {
 	endereco := c.urlPublica(fmt.Sprintf("/contacts/%s/conversations/%d/messages",
 		url.PathEscape(sourceId), conversaId))
 
 	req, err := c.requisicaoJson(http.MethodPost, endereco, map[string]any{
-		"content": texto,
+		"content":   texto,
+		"source_id": waid,
 	}, false)
 	if err != nil {
 		return nil, err
@@ -372,11 +373,15 @@ func (c *Client) ConversaAbertaDoContato(contatoId int) (int, error) {
 // CriaMensagemNaConversa publica texto numa conversa já existente, pela API de
 // conta. `incoming` mantém a mensagem atribuída ao contato: sem isso ela
 // apareceria como se a agência tivesse escrito.
-func (c *Client) CriaMensagemNaConversa(conversaId int, texto string) (*Mensagem, error) {
+func (c *Client) CriaMensagemNaConversa(conversaId int, texto, waid string) (*Mensagem, error) {
 	endereco := c.urlConta(fmt.Sprintf("/conversations/%d/messages", conversaId))
 	req, err := c.requisicaoJson(http.MethodPost, endereco, map[string]any{
 		"content":      texto,
 		"message_type": "incoming",
+		// O WAID no source_id é o que liga a mensagem do Chatwoot à do WhatsApp.
+		// Sem ele o Chatwoot perde a própria proteção contra duplicata, e quem
+		// audita entrega de fora não tem por onde procurar.
+		"source_id": waid,
 	}, true)
 	if err != nil {
 		return nil, err
@@ -392,7 +397,7 @@ func (c *Client) CriaMensagemNaConversa(conversaId int, texto string) (*Mensagem
 // CriaMensagemComAnexo sobe mídia (áudio, imagem, documento) pela API de conta:
 // a API pública não aceita anexo, e é justamente a mídia que o roteiro de
 // recuperação por SQL nunca conseguiu resgatar.
-func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype string, conteudo []byte) (*Mensagem, error) {
+func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype, waid string, conteudo []byte) (*Mensagem, error) {
 	var corpo bytes.Buffer
 	form := multipart.NewWriter(&corpo)
 
@@ -401,6 +406,11 @@ func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimety
 	}
 	if err := form.WriteField("message_type", "incoming"); err != nil {
 		return nil, err
+	}
+	if waid != "" {
+		if err := form.WriteField("source_id", waid); err != nil {
+			return nil, err
+		}
 	}
 	// CreateFormFile fixaria application/octet-stream, e o Chatwoot decide o tipo
 	// do anexo pelo Content-Type da parte: sem o mimetype real, foto de hotel

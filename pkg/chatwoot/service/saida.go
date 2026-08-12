@@ -16,6 +16,9 @@ type WebhookChatwoot struct {
 	MessageType string `json:"message_type"`
 	Content     string `json:"content"`
 	Private     bool   `json:"private"`
+	// is_private marca a digitação numa nota interna: o cliente não pode ver
+	// "digitando" enquanto o time conversa entre si.
+	IsPrivate   bool   `json:"is_private"`
 	Id          int    `json:"id"`
 	SourceId    string `json:"source_id"`
 	Attachments []struct {
@@ -52,11 +55,16 @@ type EnviaMidia func(instanceId, numero, tipo, legenda, arquivo string, conteudo
 // conteúdo e o nome do arquivo.
 type BaixaAnexo func(url string) (conteudo []byte, arquivo string, err error)
 
+// EnviaPresenca reproduz no WhatsApp o "digitando" do agente. `estado` é
+// composing ou paused.
+type EnviaPresenca func(instanceId, numero, estado string) error
+
 type Saida struct {
-	repo       chatwoot_repository.ChatwootRepository
-	envia      EnviaTexto
-	enviaMidia EnviaMidia
-	baixa      BaixaAnexo
+	repo          chatwoot_repository.ChatwootRepository
+	envia         EnviaTexto
+	enviaMidia    EnviaMidia
+	baixa         BaixaAnexo
+	enviaPresenca EnviaPresenca
 }
 
 func NewSaida(repo chatwoot_repository.ChatwootRepository, envia EnviaTexto) *Saida {
@@ -69,6 +77,55 @@ func (s *Saida) ComMidia(baixa BaixaAnexo, envia EnviaMidia) *Saida {
 	s.baixa = baixa
 	s.enviaMidia = envia
 	return s
+}
+
+// ComPresenca liga o "digitando". Sem isso o cliente fica sem sinal nenhum
+// enquanto o agente escreve, o que numa negociação parece abandono.
+func (s *Saida) ComPresenca(envia EnviaPresenca) *Saida {
+	s.enviaPresenca = envia
+	return s
+}
+
+// presenca reproduz o "digitando" do agente no WhatsApp.
+//
+// Falha aqui nunca vira erro: presença é enfeite, e um 500 faria o Chatwoot
+// reentregar um evento efêmero que já passou.
+func (s *Saida) presenca(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot) (Resultado, error) {
+	if s.enviaPresenca == nil {
+		return Resultado{Ignorado: true, Motivo: "presença não configurada"}, nil
+	}
+	if hook.IsPrivate {
+		return Resultado{Ignorado: true, Motivo: "digitação em nota privada"}, nil
+	}
+
+	numero := telefoneDaConversa(hook)
+	if numero == "" {
+		return Resultado{Ignorado: true, Motivo: "conversa sem telefone do contato"}, nil
+	}
+
+	estado := "paused"
+	if hook.Event == "conversation_typing_on" {
+		estado = "composing"
+	}
+
+	if err := s.enviaPresenca(config.InstanceId, numero, estado); err != nil {
+		return Resultado{Ignorado: true, Motivo: "falha ao enviar presença: " + err.Error()}, nil
+	}
+	return Resultado{Ignorado: true, Motivo: "presença " + estado + " enviada"}, nil
+}
+
+// telefoneDaConversa tira o telefone do contato do payload, em qualquer um dos
+// dois campos em que o Chatwoot o entrega.
+func telefoneDaConversa(hook *WebhookChatwoot) string {
+	numero := hook.Conversation.Meta.Sender.Identifier
+	if numero == "" {
+		numero = hook.Conversation.Meta.Sender.PhoneNumber
+	}
+	// O identifier criado pela Evolution Node vem como JID completo.
+	if i := strings.Index(numero, "@"); i > 0 {
+		numero = numero[:i]
+	}
+	return strings.TrimPrefix(strings.TrimSpace(numero), "+")
 }
 
 // tipoDoChatwoot traduz o file_type do Chatwoot para o tipo do evolution-go.
@@ -177,6 +234,9 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 	if config == nil || !config.Enabled {
 		return Resultado{Ignorado: true, Motivo: "chatwoot desabilitado na instância"}, nil
 	}
+	if hook.Event == "conversation_typing_on" || hook.Event == "conversation_typing_off" {
+		return s.presenca(config, hook)
+	}
 	if hook.Event != "message_created" {
 		return Resultado{Ignorado: true, Motivo: "evento fora do escopo"}, nil
 	}
@@ -210,11 +270,7 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 		}
 	}
 
-	numero := hook.Conversation.Meta.Sender.Identifier
-	if numero == "" {
-		numero = hook.Conversation.Meta.Sender.PhoneNumber
-	}
-	numero = strings.TrimPrefix(strings.TrimSpace(numero), "+")
+	numero := telefoneDaConversa(hook)
 	if numero == "" {
 		return Resultado{Ignorado: true, Motivo: "conversa sem telefone do contato"}, nil
 	}

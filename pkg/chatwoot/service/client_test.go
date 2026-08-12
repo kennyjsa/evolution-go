@@ -139,7 +139,7 @@ func TestCriaMensagemUsaCaminhoDaConversa(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"id": 555})
 	})
 
-	mensagem, err := cliente.CriaMensagem("src-9", 11, "oi")
+	mensagem, err := cliente.CriaMensagem("src-9", 11, "oi", "WAID-1")
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestCriaMensagemComAnexoMandaMultipartIncoming(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"id": 777})
 	})
 
-	mensagem, err := cliente.CriaMensagemComAnexo(11, "áudio", "audio.ogg", "audio/ogg; codecs=opus", []byte("bytes-do-audio"))
+	mensagem, err := cliente.CriaMensagemComAnexo(11, "áudio", "audio.ogg", "audio/ogg; codecs=opus", "WAID-AUDIO", []byte("bytes-do-audio"))
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}

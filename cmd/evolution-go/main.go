@@ -327,7 +327,20 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 				}
 				return enviada.Info.ID, nil
 			},
-		),
+		).ComPresenca(func(instanceId, numero, estado string) error {
+			instance, err := instanceRepository.GetInstanceByID(instanceId)
+			if err != nil {
+				return err
+			}
+			if instance == nil {
+				return fmt.Errorf("instância %s não existe", instanceId)
+			}
+			_, err = messageService.ChatPresence(&message_service.ChatPresenceStruct{
+				Number: numero,
+				State:  estado,
+			}, instance)
+			return err
+		}),
 		loggerWrapper,
 	)
 	chatwootHandler.RegisterRoutes(r)

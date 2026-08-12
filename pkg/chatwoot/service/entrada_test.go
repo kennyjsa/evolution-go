@@ -74,7 +74,7 @@ func (c *clienteFalso) SourceIdDaInbox(int) (string, error) { return c.sourceId,
 func (c *clienteFalso) ConversaAbertaDoContato(int) (int, error) {
 	return c.conversaDoContato, nil
 }
-func (c *clienteFalso) CriaMensagemNaConversa(_ int, texto string) (*Mensagem, error) {
+func (c *clienteFalso) CriaMensagemNaConversa(_ int, texto, waid string) (*Mensagem, error) {
 	if c.erroMensagem != nil {
 		return nil, c.erroMensagem
 	}
@@ -92,7 +92,7 @@ func (c *clienteFalso) CriaConversa(string) (*Conversa, error) {
 	c.conversa = &Conversa{Id: 11}
 	return c.conversa, nil
 }
-func (c *clienteFalso) CriaMensagem(_ string, _ int, texto string) (*Mensagem, error) {
+func (c *clienteFalso) CriaMensagem(_ string, _ int, texto, waid string) (*Mensagem, error) {
 	if c.erroMensagem != nil {
 		return nil, c.erroMensagem
 	}

@@ -11,7 +11,7 @@ type anexo struct {
 	conteudo                 []byte
 }
 
-func (c *clienteFalso) CriaMensagemComAnexo(_ int, texto, arquivo, mimetype string, conteudo []byte) (*Mensagem, error) {
+func (c *clienteFalso) CriaMensagemComAnexo(_ int, texto, arquivo, mimetype, waid string, conteudo []byte) (*Mensagem, error) {
 	if c.erroMensagem != nil {
 		return nil, c.erroMensagem
 	}
