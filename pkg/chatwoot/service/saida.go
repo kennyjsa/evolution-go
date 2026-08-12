@@ -26,12 +26,12 @@ type WebhookChatwoot struct {
 		FileType string `json:"file_type"`
 		DataUrl  string `json:"data_url"`
 	} `json:"attachments"`
+	// O sender da mensagem traz só id, name e email: o webhook_data do usuário
+	// no Chatwoot não inclui o nome de exibição.
 	Sender struct {
+		Id   int    `json:"id"`
 		Name string `json:"name"`
-		// available_name é o nome de exibição do agente; quando o time usa
-		// apelido no atendimento, é ele que o cliente reconhece.
-		AvailableName string `json:"available_name"`
-		Type          string `json:"type"`
+		Type string `json:"type"`
 	} `json:"sender"`
 	Conversation struct {
 		Id   int `json:"id"`
@@ -40,6 +40,14 @@ type WebhookChatwoot struct {
 				Identifier  string `json:"identifier"`
 				PhoneNumber string `json:"phone_number"`
 			} `json:"sender"`
+			// O assignee vem pelo push_event_data, que — ao contrário do
+			// webhook_data do sender — carrega o available_name, isto é, o
+			// "Nome para exibição" configurado pelo agente.
+			Assignee struct {
+				Id            int    `json:"id"`
+				Name          string `json:"name"`
+				AvailableName string `json:"available_name"`
+			} `json:"assignee"`
 		} `json:"meta"`
 	} `json:"conversation"`
 }
@@ -154,10 +162,7 @@ func assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto 
 		return texto
 	}
 
-	nome := strings.TrimSpace(hook.Sender.AvailableName)
-	if nome == "" {
-		nome = strings.TrimSpace(hook.Sender.Name)
-	}
+	nome := nomeDeQuemRespondeu(hook)
 	// Sem nome não há o que assinar — e "**: texto" seria pior que texto puro.
 	if nome == "" {
 		return texto
@@ -167,7 +172,30 @@ func assina(config *chatwoot_model.ChatwootConfig, hook *WebhookChatwoot, texto 
 	if delimitador == "" {
 		delimitador = "\n"
 	}
-	return "*" + nome + "*" + delimitador + texto
+	// Dois-pontos dentro do negrito é o formato do Evolution, que é o que os
+	// clientes da agência já leem há meses.
+	return "*" + nome + ":*" + delimitador + texto
+}
+
+// nomeDeQuemRespondeu prefere o "Nome para exibição" do agente.
+//
+// O sender da mensagem só traz o nome completo (o webhook_data do usuário no
+// Chatwoot não inclui available_name), mas o assignee da conversa vem pelo
+// push_event_data e carrega o apelido — e é ele quem o cliente reconhece.
+func nomeDeQuemRespondeu(hook *WebhookChatwoot) string {
+	assignee := hook.Conversation.Meta.Assignee
+
+	// Só vale quando quem respondeu é o próprio responsável pela conversa;
+	// senão a mensagem sairia assinada com o nome de outra pessoa.
+	if assignee.Id != 0 && (hook.Sender.Id == 0 || assignee.Id == hook.Sender.Id) {
+		if nome := strings.TrimSpace(assignee.AvailableName); nome != "" {
+			return nome
+		}
+		if nome := strings.TrimSpace(assignee.Name); nome != "" {
+			return nome
+		}
+	}
+	return strings.TrimSpace(hook.Sender.Name)
 }
 
 // entrega manda texto, anexos, ou os dois, e devolve o WAID da última mensagem
