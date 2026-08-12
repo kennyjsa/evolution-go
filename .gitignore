@@ -7,3 +7,10 @@ coverage.*
 .idea/
 .vscode/
 .DS_Store
+
+# O manager é compilado a partir de evolution-go-manager/ (etapa node no
+# Dockerfile). Commitar o bundle criaria uma segunda fonte da verdade, que foi
+# justamente o que escondeu o fonte da tela por tanto tempo.
+manager/dist/
+evolution-go-manager/node_modules/
+evolution-go-manager/dist/

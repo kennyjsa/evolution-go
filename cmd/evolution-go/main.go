@@ -334,7 +334,6 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// O CRUD da config mexe em credencial do Chatwoot, então fica atrás da
 	// apikey global — ao contrário do webhook, que o Chatwoot chama sem apikey.
 	chatwootHandler.RegisterConfigRoutes(r, auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
-	chatwootHandler.RegisterUIRoute(r)
 
 	// Passkey ceremony routes — PUBLIC (called by the browser extension from the
 	// web.whatsapp.com origin, gated only by an opaque ephemeral token).
