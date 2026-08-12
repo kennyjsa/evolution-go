@@ -93,6 +93,10 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	killChannel := make(map[string](chan bool))
 	clientPointer := make(map[string]*whatsmeow.Client)
 
+	// Preenchido quando o JetStream está ligado; é por ele que as rotas da fila
+	// morta chegam ao consumidor.
+	var filaMortaChatwoot *chatwoot_consumer.Consumer
+
 	loggerWrapper := logger_wrapper.NewLoggerManager(config)
 
 	var rabbitmqProducer producer_interfaces.Producer
@@ -173,6 +177,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 					}),
 				loggerWrapper,
 			).ComRecibos(chatwoot_service.NewRecibo(repoChatwoot))
+			filaMortaChatwoot = consumidor
 			if err := consumidor.Start(config.NatsUrl, config.NatsStreamName); err != nil {
 				// Falhar aqui não pode derrubar o evolution-go: sem o conector
 				// o WhatsApp continua funcionando, só o espelho no Chatwoot para.
@@ -347,6 +352,12 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// O CRUD da config mexe em credencial do Chatwoot, então fica atrás da
 	// apikey global — ao contrário do webhook, que o Chatwoot chama sem apikey.
 	chatwootHandler.RegisterConfigRoutes(r, auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
+	// Fila morta: o que falhou ate o fim das tentativas fica visivel e pode ser
+	// reinjetado depois que a causa for corrigida.
+	if filaMortaChatwoot != nil {
+		chatwootHandler.RegisterDLQRoutes(r, filaMortaChatwoot,
+			auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
+	}
 
 	// Passkey ceremony routes — PUBLIC (called by the browser extension from the
 	// web.whatsapp.com origin, gated only by an opaque ephemeral token).
