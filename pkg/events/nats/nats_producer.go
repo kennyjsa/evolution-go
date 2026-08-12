@@ -37,7 +37,23 @@ var eventMap = map[string][]string{
 const (
 	maxRetries     = 3
 	publishTimeout = 10 * time.Second
+
+	// prefixoSubject dá namespace próprio aos eventos. Sem ele o subject por
+	// instância vira `*.<evento>`, cujo `*` casa com `$JS` e invade o namespace
+	// da API do JetStream — o servidor recusa o stream com o erro 10052
+	// ("subjects that overlap with jetstream api"). O prefixo também isola o
+	// evolution-go de outros produtores no mesmo servidor NATS.
+	prefixoSubject = "evolution."
 )
+
+// comSubjectPrefixado devolve o subject publicado de fato para um nome de
+// evento vindo do chamador (que é o mesmo do producer do RabbitMQ).
+func comSubjectPrefixado(subject string) string {
+	if strings.HasPrefix(subject, prefixoSubject) {
+		return subject
+	}
+	return prefixoSubject + subject
+}
 
 type natsProducer struct {
 	conn              *nats.Conn
@@ -145,8 +161,8 @@ func (p *natsProducer) subjectsDoStream() []string {
 
 	for _, evento := range eventos {
 		for _, subject := range eventMap[strings.ToUpper(evento)] {
-			adiciona(subject)
-			adiciona("*." + subject)
+			adiciona(comSubjectPrefixado(subject))
+			adiciona(comSubjectPrefixado("*." + subject))
 		}
 	}
 	return subjects
@@ -155,6 +171,10 @@ func (p *natsProducer) subjectsDoStream() []string {
 func (p *natsProducer) publish(subject string, payload []byte, userID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()
+
+	// O chamador passa o nome cru do evento (`message`, `<instanceId>.message`);
+	// o subject publicado é sempre o prefixado, igual ao declarado no stream.
+	subject = comSubjectPrefixado(subject)
 
 	if !p.jetStreamEnabled {
 		return p.conn.Publish(subject, payload)
