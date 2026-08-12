@@ -34,8 +34,17 @@ const (
 	// chegou com o evolution-go fora do ar é entregue quando ele volta.
 	nomeDurable = "chatwoot-entrada"
 
-	maxDeliver = 5
-	ackWait    = 30 * time.Second
+	maxDeliver        = 5
+	publishTimeoutDLQ = 10 * time.Second
+	ackWait           = 30 * time.Second
+
+	// Fila morta: depois de maxDeliver tentativas a mensagem para de ser
+	// reentregue e some. Guardá-la aqui é o que separa "falhou e alguém vê" de
+	// "sumiu calada" — foi assim que uma mensagem real se perdeu quando o token
+	// do Chatwoot estava errado.
+	streamDLQ   = "CHATWOOT_DLQ"
+	subjectDLQ  = "evolution.chatwoot.dlq"
+	validadeDLQ = 30 * 24 * time.Hour
 )
 
 // processador é o recorte da Entrada que o consumidor usa — declarado aqui para
@@ -51,11 +60,15 @@ type processadorRecibo interface {
 }
 
 type Consumer struct {
-	conn    *nats.Conn
-	entrada processador
-	recibo  processadorRecibo
-	logger  *logger_wrapper.LoggerManager
-	ctx     jetstream.ConsumeContext
+	conn *nats.Conn
+	js   jetstream.JetStream
+	// publicaNaFilaMorta existe para o teste exercitar a decisão de ack sem
+	// subir um servidor NATS.
+	publicaNaFilaMorta func(dados []byte) error
+	entrada            processador
+	recibo             processadorRecibo
+	logger             *logger_wrapper.LoggerManager
+	ctx                jetstream.ConsumeContext
 }
 
 func New(entrada processador, logger *logger_wrapper.LoggerManager) *Consumer {
@@ -97,6 +110,25 @@ func (c *Consumer) Start(url, streamName string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	c.js = js
+
+	// A fila morta é um stream próprio, com retenção longa: ela precisa
+	// sobreviver ao MaxAge curto do stream de eventos, senão a mensagem perdida
+	// desapareceria antes de alguém olhar.
+	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:        streamDLQ,
+		Subjects:    []string{subjectDLQ},
+		Storage:     jetstream.FileStorage,
+		Retention:   jetstream.LimitsPolicy,
+		MaxAge:      validadeDLQ,
+		Description: "Eventos que o conector Chatwoot nao conseguiu processar",
+	}); err != nil {
+		// Sem DLQ o conector ainda funciona; só volta a perder o que falha
+		// demais. Não é motivo para deixar o WhatsApp fora do ar.
+		c.logger.GetLogger("system").LogError(
+			"Conector Chatwoot: falha ao preparar a fila morta: %v", err)
+	}
 
 	stream, err := js.Stream(ctx, streamName)
 	if err != nil {
@@ -153,6 +185,14 @@ func (c *Consumer) trata(msg jetstream.Msg) {
 	if err != nil {
 		log.LogError("[%s] Conector Chatwoot falhou no waid %s: %v",
 			evento.InstanceId, evento.Data.Info.ID, err)
+
+		// Última tentativa: em vez de deixar o JetStream descartar em silêncio,
+		// a mensagem vai para a fila morta e o ack libera a fila.
+		if c.ultimaTentativa(msg) {
+			c.paraFilaMorta(msg, err)
+			return
+		}
+
 		// Nak explícito reentrega já, em vez de esperar o AckWait vencer.
 		_ = msg.Nak()
 		return
@@ -189,6 +229,58 @@ func (c *Consumer) trataRecibo(msg jetstream.Msg) {
 		c.logger.GetLogger("system").LogInfo(
 			"Conector Chatwoot ignorou recibo: %s", resultado.Motivo)
 	}
+	_ = msg.Ack()
+}
+
+// ultimaTentativa diz se esta entrega é a última que o JetStream fará.
+func (c *Consumer) ultimaTentativa(msg jetstream.Msg) bool {
+	meta, err := msg.Metadata()
+	if err != nil {
+		// Sem metadados não dá para saber a tentativa; reentregar é mais seguro
+		// que mandar para a fila morta cedo demais.
+		return false
+	}
+	return meta.NumDelivered >= maxDeliver
+}
+
+// paraFilaMorta guarda o evento com o motivo da falha e dá ack, para a fila não
+// travar. O ack aqui não é "deu certo": é "parou de tentar, e está guardado".
+func (c *Consumer) paraFilaMorta(msg jetstream.Msg, causa error) {
+	log := c.logger.GetLogger("system")
+
+	publica := c.publicaNaFilaMorta
+	if publica == nil {
+		publica = func(dados []byte) error {
+			if c.js == nil {
+				return fmt.Errorf("jetstream indisponivel")
+			}
+
+			cabecalho := nats.Header{}
+			cabecalho.Set("Chatwoot-Erro", causa.Error())
+			cabecalho.Set("Chatwoot-Subject-Original", msg.Subject())
+			cabecalho.Set("Chatwoot-Tentativas", fmt.Sprint(maxDeliver))
+
+			ctx, cancel := context.WithTimeout(context.Background(), publishTimeoutDLQ)
+			defer cancel()
+
+			_, err := c.js.PublishMsg(ctx, &nats.Msg{
+				Subject: subjectDLQ,
+				Data:    dados,
+				Header:  cabecalho,
+			})
+			return err
+		}
+	}
+
+	if err := publica(msg.Data()); err != nil {
+		// Não deu para guardar: melhor reentregar do que dar ack e perder.
+		log.LogError("Conector Chatwoot: falha ao gravar na fila morta (%v); reentregando", err)
+		_ = msg.Nak()
+		return
+	}
+
+	log.LogError("Conector Chatwoot: evento movido para a fila morta apos %d tentativas: %v",
+		maxDeliver, causa)
 	_ = msg.Ack()
 }
 
