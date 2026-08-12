@@ -25,7 +25,10 @@ import (
 	call_service "github.com/evolution-foundation/evolution-go/pkg/call/service"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
+	chatwoot_consumer "github.com/evolution-foundation/evolution-go/pkg/chatwoot/consumer"
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
+	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
+	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	community_service "github.com/evolution-foundation/evolution-go/pkg/community/service"
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
@@ -129,6 +132,21 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		if config.NatsJetStreamEnabled {
 			if err := natsProducer.CreateGlobalQueues(); err != nil {
 				logger.LogError("Failed to create JetStream stream: %v", err)
+			}
+
+			// O conector do Chatwoot lê do stream. Sem JetStream não há stream
+			// de onde ler, e uma mensagem publicada sem consumidor no ar some —
+			// por isso ele só sobe junto do stream durável.
+			consumidor := chatwoot_consumer.New(
+				chatwoot_service.NewEntrada(chatwoot_repository.NewChatwootRepository(db)),
+				loggerWrapper,
+			)
+			if err := consumidor.Start(config.NatsUrl, config.NatsStreamName); err != nil {
+				// Falhar aqui não pode derrubar o evolution-go: sem o conector
+				// o WhatsApp continua funcionando, só o espelho no Chatwoot para.
+				logger.LogError("Failed to start Chatwoot consumer: %v", err)
+			} else {
+				defer consumidor.Stop()
 			}
 		}
 	} else {
