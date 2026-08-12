@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conector Chatwoot</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; margin-top: .8rem; font-size: .9rem; font-weight: 600; }
+  input, select { width: 100%; padding: .5rem; font-size: 1rem; box-sizing: border-box; }
+  .linha { display: flex; gap: .6rem; align-items: center; margin-top: .8rem; }
+  .linha input[type=checkbox] { width: auto; }
+  button { margin-top: 1.2rem; padding: .6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+  button.perigo { margin-left: .6rem; }
+  #aviso { margin-top: 1rem; padding: .7rem; border-radius: .3rem; white-space: pre-wrap; }
+  #aviso.ok { background: #e6f4ea; color: #14532d; }
+  #aviso.erro { background: #fde8e8; color: #7f1d1d; }
+  code { word-break: break-all; }
+  .dica { font-size: .85rem; opacity: .75; margin-top: .2rem; }
+</style>
+</head>
+<body>
+<h1>Conector Chatwoot</h1>
+
+<label>API key global
+  <input id="apikey" type="password" placeholder="apikey do evolution-go" autocomplete="off">
+</label>
+<div class="dica">Fica só nesta aba do navegador; não é gravada no servidor.</div>
+<button id="carregar">Carregar instâncias</button>
+
+<label>Instância
+  <select id="instancia"><option value="">—</option></select>
+</label>
+
+<form id="form" hidden>
+  <label>URL do Chatwoot
+    <input id="url" placeholder="http://chatwoot:3000" required>
+  </label>
+  <label>Account ID
+    <input id="accountId" placeholder="1" required>
+  </label>
+  <label>Token da conta
+    <input id="accountToken" type="password" placeholder="deixe vazio para manter o atual" autocomplete="off">
+  </label>
+  <label>Inbox ID
+    <input id="inboxId" placeholder="2">
+  </label>
+  <label>Inbox identifier (Channel::Api)
+    <input id="inboxIdentifier" required>
+  </label>
+  <div class="linha"><input id="enabled" type="checkbox" checked><label for="enabled" style="margin:0">Conector ligado</label></div>
+  <div class="linha"><input id="syncGroups" type="checkbox"><label for="syncGroups" style="margin:0">Sincronizar grupos</label></div>
+  <div class="linha"><input id="markAsRead" type="checkbox"><label for="markAsRead" style="margin:0">Marcar como lida</label></div>
+
+  <button type="submit">Salvar</button>
+  <button type="button" id="apagar" class="perigo">Apagar config</button>
+</form>
+
+<div id="aviso" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function avisa(texto, ok) {
+  const el = $('aviso');
+  el.textContent = texto;
+  el.className = ok ? 'ok' : 'erro';
+  el.hidden = false;
+}
+
+function chama(metodo, caminho, corpo) {
+  return fetch(caminho, {
+    method: metodo,
+    headers: {'Content-Type': 'application/json', 'apikey': $('apikey').value},
+    body: corpo ? JSON.stringify(corpo) : undefined,
+  }).then(async r => {
+    const texto = await r.text();
+    let dados = {};
+    try { dados = texto ? JSON.parse(texto) : {}; } catch (e) { dados = {erro: texto}; }
+    if (!r.ok) throw new Error(dados.error || dados.erro || ('HTTP ' + r.status));
+    return dados;
+  });
+}
+
+$('carregar').onclick = () => {
+  chama('GET', '/instance/all').then(dados => {
+    const lista = Array.isArray(dados) ? dados : (dados.instances || dados.data || []);
+    const sel = $('instancia');
+    sel.innerHTML = '<option value="">—</option>';
+    lista.forEach(i => {
+      const o = document.createElement('option');
+      o.value = i.id || i.Id || i.instanceId;
+      o.textContent = (i.name || i.Name || o.value) + (i.connected ? ' (conectada)' : '');
+      sel.appendChild(o);
+    });
+    avisa(lista.length + ' instância(s) carregada(s).', true);
+  }).catch(e => avisa('Falha ao carregar instâncias: ' + e.message, false));
+};
+
+// Config ausente é o caso normal da primeira vez: o formulário abre vazio em
+// vez de mostrar erro.
+$('instancia').onchange = () => {
+  const id = $('instancia').value;
+  $('form').hidden = !id;
+  $('aviso').hidden = true;
+  if (!id) return;
+
+  chama('GET', '/chatwoot/' + id).then(c => {
+    $('url').value = c.url || '';
+    $('accountId').value = c.accountId || '';
+    $('inboxId').value = c.inboxId || '';
+    $('inboxIdentifier').value = c.inboxIdentifier || '';
+    $('enabled').checked = !!c.enabled;
+    $('syncGroups').checked = !!c.syncGroups;
+    $('markAsRead').checked = !!c.markAsRead;
+    $('accountToken').value = '';
+    $('accountToken').placeholder = c.accountTokenSet
+      ? 'deixe vazio para manter o atual' : 'obrigatório';
+    avisa('Webhook para configurar na inbox do Chatwoot:\n'
+      + location.origin + c.webhookUrl, true);
+  }).catch(e => {
+    ['url','accountId','inboxId','inboxIdentifier','accountToken'].forEach(k => $(k).value = '');
+    avisa('Sem config ainda para esta instância. Preencha e salve.', true);
+  });
+};
+
+$('form').onsubmit = ev => {
+  ev.preventDefault();
+  const id = $('instancia').value;
+  chama('PUT', '/chatwoot/' + id, {
+    enabled: $('enabled').checked,
+    url: $('url').value.trim(),
+    accountId: $('accountId').value.trim(),
+    accountToken: $('accountToken').value,
+    inboxId: $('inboxId').value.trim(),
+    inboxIdentifier: $('inboxIdentifier').value.trim(),
+    syncGroups: $('syncGroups').checked,
+    markAsRead: $('markAsRead').checked,
+  }).then(r => {
+    $('accountToken').value = '';
+    avisa('Salvo. Webhook para configurar na inbox do Chatwoot:\n'
+      + location.origin + r.webhookUrl, true);
+  }).catch(e => avisa('Falha ao salvar: ' + e.message, false));
+};
+
+$('apagar').onclick = () => {
+  const id = $('instancia').value;
+  if (!confirm('Apagar a config do Chatwoot desta instância?')) return;
+  chama('DELETE', '/chatwoot/' + id)
+    .then(() => avisa('Config apagada.', true))
+    .catch(e => avisa('Falha ao apagar: ' + e.message, false));
+};
+</script>
+</body>
+</html>
