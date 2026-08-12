@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
@@ -25,6 +26,10 @@ const (
 	subjectGlobal    = "evolution.message"
 	subjectInstancia = "evolution.*.message"
 
+	// Recibos alimentam o status da mensagem no Chatwoot (entregue/lido).
+	subjectReciboGlobal    = "evolution.receipt"
+	subjectReciboInstancia = "evolution.*.receipt"
+
 	// Durável: o consumidor guarda a posição no servidor, então evento que
 	// chegou com o evolution-go fora do ar é entregue quando ele volta.
 	nomeDurable = "chatwoot-entrada"
@@ -39,15 +44,37 @@ type processador interface {
 	Processa(evento *chatwoot_service.Evento) (chatwoot_service.Resultado, error)
 }
 
+// processadorRecibo recebe o payload cru: o recibo tem forma própria e nada a
+// ver com o evento de mensagem.
+type processadorRecibo interface {
+	Processa(bruto []byte) (chatwoot_service.Resultado, error)
+}
+
 type Consumer struct {
 	conn    *nats.Conn
 	entrada processador
+	recibo  processadorRecibo
 	logger  *logger_wrapper.LoggerManager
 	ctx     jetstream.ConsumeContext
 }
 
 func New(entrada processador, logger *logger_wrapper.LoggerManager) *Consumer {
 	return &Consumer{entrada: entrada, logger: logger}
+}
+
+// ComRecibos liga o status de entrega/leitura. Sem isto o consumidor continua
+// assinando só as mensagens.
+func (c *Consumer) ComRecibos(recibo processadorRecibo) *Consumer {
+	c.recibo = recibo
+	return c
+}
+
+func (c *Consumer) subjects() []string {
+	s := []string{subjectGlobal, subjectInstancia}
+	if c.recibo != nil {
+		s = append(s, subjectReciboGlobal, subjectReciboInstancia)
+	}
+	return s
 }
 
 // Start conecta, cria/atualiza o consumidor durável e começa a consumir em
@@ -78,7 +105,7 @@ func (c *Consumer) Start(url, streamName string) error {
 
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:        nomeDurable,
-		FilterSubjects: []string{subjectGlobal, subjectInstancia},
+		FilterSubjects: c.subjects(),
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		AckWait:        ackWait,
 		MaxDeliver:     maxDeliver,
@@ -96,8 +123,8 @@ func (c *Consumer) Start(url, streamName string) error {
 	c.ctx = consumeCtx
 
 	c.logger.GetLogger("system").LogInfo(
-		"Conector Chatwoot consumindo %s de %s (%s, %s)",
-		nomeDurable, streamName, subjectGlobal, subjectInstancia)
+		"Conector Chatwoot consumindo %s de %s (%s)",
+		nomeDurable, streamName, strings.Join(c.subjects(), ", "))
 	return nil
 }
 
@@ -105,6 +132,13 @@ func (c *Consumer) Start(url, streamName string) error {
 // nova tentativa pode resolver. Payload inválido reentregue é reentregue para
 // sempre — isso trava o consumidor numa mensagem que nunca vai passar.
 func (c *Consumer) trata(msg jetstream.Msg) {
+	// Recibo tem forma própria; roteia pelo subject para não tentar lê-lo como
+	// evento de mensagem.
+	if strings.HasSuffix(msg.Subject(), ".receipt") {
+		c.trataRecibo(msg)
+		return
+	}
+
 	var evento chatwoot_service.Evento
 	if err := json.Unmarshal(msg.Data(), &evento); err != nil {
 		c.logger.GetLogger("system").LogError(
@@ -130,6 +164,30 @@ func (c *Consumer) trata(msg jetstream.Msg) {
 	} else {
 		log.LogInfo("[%s] Conector Chatwoot criou mensagem %d no Chatwoot (waid %s)",
 			evento.InstanceId, resultado.ChatwootMessageId, evento.Data.Info.ID)
+	}
+	_ = msg.Ack()
+}
+
+// trataRecibo atualiza o status da mensagem no Chatwoot.
+//
+// Status é informação acessória: se falhar, vale uma retentativa, mas nunca ao
+// ponto de travar a fila — por isso o mesmo critério de ack da mensagem.
+func (c *Consumer) trataRecibo(msg jetstream.Msg) {
+	if c.recibo == nil {
+		_ = msg.Ack()
+		return
+	}
+
+	resultado, err := c.recibo.Processa(msg.Data())
+	if err != nil {
+		c.logger.GetLogger("system").LogError(
+			"Conector Chatwoot falhou ao atualizar status: %v", err)
+		_ = msg.Nak()
+		return
+	}
+	if resultado.Ignorado {
+		c.logger.GetLogger("system").LogInfo(
+			"Conector Chatwoot ignorou recibo: %s", resultado.Motivo)
 	}
 	_ = msg.Ack()
 }

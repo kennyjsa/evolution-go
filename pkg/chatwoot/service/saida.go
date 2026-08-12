@@ -195,10 +195,13 @@ func (s *Saida) Processa(config *chatwoot_model.ChatwootConfig, hook *WebhookCha
 	// falhasse, porque a reentrega a veria como já enviada.
 	if waid != "" {
 		if err := s.repo.MarcaProcessada(chatwoot_model.MensagemProcessada{
-			Waid:              waid,
-			InstanceId:        config.InstanceId,
-			ChatwootMessageId: hook.Id,
-			Direcao:           "saida",
+			Waid:       waid,
+			InstanceId: config.InstanceId,
+			// A conversa é gravada junto porque o recibo de leitura precisa dela
+			// para achar a mensagem: o endpoint de status é aninhado na conversa.
+			ChatwootMessageId:  hook.Id,
+			ChatwootConversaId: hook.Conversation.Id,
+			Direcao:            "saida",
 		}); err != nil {
 			return Resultado{}, err
 		}

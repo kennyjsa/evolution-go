@@ -133,3 +133,63 @@ func TestEntradaSemBaixadorUsaMarcador(t *testing.T) {
 		t.Errorf("sem baixador não deveria haver anexo: %+v / %v", cliente.anexos, cliente.textos)
 	}
 }
+
+// markAsRead devolve o tique azul ao cliente; sem ele o cliente não sabe se o
+// atendimento viu a mensagem.
+func TestEntradaMarcaComoLidaQuandoConfigurado(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{}
+	repo.config.MarkAsRead = true
+
+	var marcados []string
+	e := monta(repo, cliente).ComMarcadorDeLida(
+		func(_, _, _, waid string) error {
+			marcados = append(marcados, waid)
+			return nil
+		})
+
+	if _, err := e.Processa(evento(t, infoPadrao(), map[string]any{
+		"conversation": "quanto custa o pacote?",
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if len(marcados) != 1 || marcados[0] != "WAID-FOTO" {
+		t.Errorf("mensagem não foi marcada como lida: %v", marcados)
+	}
+}
+
+// Sem markAsRead na config, não manda recibo: quem desligou não quer que o
+// cliente saiba que a mensagem foi vista.
+func TestEntradaNaoMarcaLidaSemConfig(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{}
+
+	var marcados []string
+	e := monta(repo, cliente).ComMarcadorDeLida(
+		func(_, _, _, waid string) error { marcados = append(marcados, waid); return nil })
+
+	if _, err := e.Processa(evento(t, infoPadrao(), map[string]any{
+		"conversation": "oi",
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if len(marcados) != 0 {
+		t.Errorf("marcou como lida com markAsRead desligado: %v", marcados)
+	}
+}
+
+// Falha ao marcar lida não pode desfazer a mensagem já criada nem provocar
+// reentrega.
+func TestEntradaFalhaAoMarcarLidaNaoQuebraMensagem(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{}
+	repo.config.MarkAsRead = true
+
+	e := monta(repo, cliente).ComMarcadorDeLida(
+		func(_, _, _, _ string) error { return errors.New("desconectado") })
+
+	res, err := e.Processa(evento(t, infoPadrao(), map[string]any{"conversation": "oi"}))
+	if err != nil {
+		t.Fatalf("falha ao marcar lida virou erro: %v", err)
+	}
+	if res.Ignorado || res.ChatwootMessageId == 0 {
+		t.Errorf("mensagem perdida por causa do recibo: %+v", res)
+	}
+}

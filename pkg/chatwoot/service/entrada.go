@@ -32,10 +32,15 @@ type chatwootClient interface {
 // mídia; o download é feito pelo cliente conectado da instância.
 type BaixaMidia func(instanceId string, mensagemBruta []byte) ([]byte, error)
 
+// MarcaLida manda o recibo de leitura de volta ao WhatsApp — o segundo tique
+// azul do lado do cliente, quando a instância está configurada com markAsRead.
+type MarcaLida func(instanceId, chat, remetente, waid string) error
+
 type Entrada struct {
-	repo    chatwoot_repository.ChatwootRepository
-	fabrica fabricaCliente
-	baixa   BaixaMidia
+	repo      chatwoot_repository.ChatwootRepository
+	fabrica   fabricaCliente
+	baixa     BaixaMidia
+	marcaLida MarcaLida
 }
 
 func NewEntrada(repo chatwoot_repository.ChatwootRepository) *Entrada {
@@ -51,6 +56,13 @@ func NewEntrada(repo chatwoot_repository.ChatwootRepository) *Entrada {
 // funcionando, só que mídia vira marcador ("[imagem]") em vez do arquivo.
 func (e *Entrada) ComBaixadorDeMidia(baixa BaixaMidia) *Entrada {
 	e.baixa = baixa
+	return e
+}
+
+// ComMarcadorDeLida liga o envio do recibo de leitura ao cliente. Só age nas
+// instâncias com markAsRead ligado na config.
+func (e *Entrada) ComMarcadorDeLida(marca MarcaLida) *Entrada {
+	e.marcaLida = marca
 	return e
 }
 
@@ -184,12 +196,24 @@ func (e *Entrada) Processa(evento *Evento) (Resultado, error) {
 	// A marcação vem depois do envio: marcar antes perderia a mensagem se o
 	// Chatwoot falhasse, porque a reentrega veria o WAID como já processado.
 	if err := e.repo.MarcaProcessada(chatwoot_model.MensagemProcessada{
-		Waid:              waid,
-		InstanceId:        evento.InstanceId,
-		ChatwootMessageId: mensagem.Id,
-		Direcao:           "entrada",
+		Waid:               waid,
+		InstanceId:         evento.InstanceId,
+		ChatwootMessageId:  mensagem.Id,
+		ChatwootConversaId: conversa.Id,
+		Direcao:            "entrada",
 	}); err != nil {
 		return Resultado{}, err
+	}
+
+	// A marcação de lida vem por último e não derruba nada: ela é cortesia ao
+	// cliente, e falhar nela não pode desfazer a mensagem já criada na conversa
+	// nem provocar reentrega (que duplicaria o trabalho todo).
+	if config.MarkAsRead && e.marcaLida != nil {
+		// Erro descartado de propósito: quem implementa marcaLida registra a
+		// falha, e propagá-la aqui viraria nak — reprocessando uma mensagem que
+		// já está na conversa.
+		_ = e.marcaLida(evento.InstanceId, evento.Data.Info.Chat,
+			evento.Data.Info.Sender, waid)
 	}
 
 	return Resultado{ChatwootMessageId: mensagem.Id}, nil

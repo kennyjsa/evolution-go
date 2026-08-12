@@ -97,6 +97,20 @@ func (c *Client) requisicaoJson(metodo, endereco string, corpo any, autenticaCon
 	return req, nil
 }
 
+// AtualizaStatus reflete no Chatwoot o recibo do WhatsApp (entregue/lido).
+//
+// O próprio Chatwoot recusa a transição de `read` de volta para `delivered`,
+// então recibo fora de ordem não desfaz o que já foi marcado como lido.
+func (c *Client) AtualizaStatus(conversaId, mensagemId int, status string) error {
+	endereco := c.urlConta(fmt.Sprintf("/conversations/%d/messages/%d", conversaId, mensagemId))
+	req, err := c.requisicaoJson(http.MethodPatch, endereco,
+		map[string]string{"status": status}, true)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
 func (c *Client) urlPublica(caminho string) string {
 	return fmt.Sprintf("%s/public/api/v1/inboxes/%s%s", c.baseUrl, c.inboxIdentifier, caminho)
 }

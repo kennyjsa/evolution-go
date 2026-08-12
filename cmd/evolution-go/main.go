@@ -68,6 +68,7 @@ import (
 	minio_storage "github.com/evolution-foundation/evolution-go/pkg/storage/minio"
 	user_handler "github.com/evolution-foundation/evolution-go/pkg/user/handler"
 	user_service "github.com/evolution-foundation/evolution-go/pkg/user/service"
+	"github.com/evolution-foundation/evolution-go/pkg/utils"
 	whatsmeow_service "github.com/evolution-foundation/evolution-go/pkg/whatsmeow/service"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -142,11 +143,36 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 			// O baixador usa o cliente conectado da instância: a mídia do
 			// WhatsApp vem cifrada, e só ele tem as chaves para abrir.
 			baixador := chatwoot_midia.NovoBaixador(clientPointer)
+			repoChatwoot := chatwoot_repository.NewChatwootRepository(db)
 			consumidor := chatwoot_consumer.New(
-				chatwoot_service.NewEntrada(chatwoot_repository.NewChatwootRepository(db)).
-					ComBaixadorDeMidia(baixador.Baixa),
+				chatwoot_service.NewEntrada(repoChatwoot).
+					ComBaixadorDeMidia(baixador.Baixa).
+					ComMarcadorDeLida(func(instanceId, chat, remetente, waid string) error {
+						jid, ok := utils.ParseJID(chat)
+						if !ok {
+							return fmt.Errorf("chat %q inválido", chat)
+						}
+						jid = utils.CanonicalJID(jid)
+
+						remetenteJid := jid
+						if r, ok := utils.ParseJID(remetente); ok {
+							remetenteJid = utils.CanonicalJID(r)
+						}
+
+						cliente := clientPointer[instanceId]
+						if cliente == nil {
+							return fmt.Errorf("instância %s sem cliente conectado", instanceId)
+						}
+						err := cliente.MarkRead(context.Background(),
+							[]string{waid}, time.Now(), jid, remetenteJid)
+						if err != nil {
+							loggerWrapper.GetLogger(instanceId).LogWarn(
+								"[%s] Falha ao marcar %s como lida: %v", instanceId, waid, err)
+						}
+						return err
+					}),
 				loggerWrapper,
-			)
+			).ComRecibos(chatwoot_service.NewRecibo(repoChatwoot))
 			if err := consumidor.Start(config.NatsUrl, config.NatsStreamName); err != nil {
 				// Falhar aqui não pode derrubar o evolution-go: sem o conector
 				// o WhatsApp continua funcionando, só o espelho no Chatwoot para.

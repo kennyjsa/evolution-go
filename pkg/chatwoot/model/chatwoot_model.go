@@ -58,8 +58,12 @@ type MensagemProcessada struct {
 	// Id da mensagem no Chatwoot. Permite ligar o recibo de leitura do WhatsApp
 	// à mensagem correspondente, e vice-versa.
 	ChatwootMessageId int
-	Direcao           string
-	CriadoEm          time.Time `gorm:"autoCreateTime"`
+	// Conversa a que a mensagem pertence. O endpoint de status do Chatwoot é
+	// aninhado na conversa, então sem isto o recibo de leitura não teria como
+	// localizar a mensagem para atualizar.
+	ChatwootConversaId int
+	Direcao            string
+	CriadoEm           time.Time `gorm:"autoCreateTime"`
 }
 
 func (MensagemProcessada) TableName() string {
