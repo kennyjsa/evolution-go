@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -95,6 +96,21 @@ func (c *Client) requisicaoJson(metodo, endereco string, corpo any, autenticaCon
 		req.Header.Set("api_access_token", c.accountToken)
 	}
 	return req, nil
+}
+
+// ouOctetStream devolve um Content-Type utilizável. O mimetype do WhatsApp às
+// vezes vem com parâmetros ("audio/ogg; codecs=opus"), que o Chatwoot aceita.
+func ouOctetStream(mimetype string) string {
+	if m := strings.TrimSpace(mimetype); m != "" {
+		return m
+	}
+	return "application/octet-stream"
+}
+
+// escapaAspas protege o cabeçalho de um nome de arquivo com aspas, que quebraria
+// o form-data.
+func escapaAspas(nome string) string {
+	return strings.ReplaceAll(nome, `"`, "")
 }
 
 // AtualizaStatus reflete no Chatwoot o recibo do WhatsApp (entregue/lido).
@@ -233,7 +249,7 @@ func (c *Client) CriaMensagem(sourceId string, conversaId int, texto string) (*M
 // CriaMensagemComAnexo sobe mídia (áudio, imagem, documento) pela API de conta:
 // a API pública não aceita anexo, e é justamente a mídia que o roteiro de
 // recuperação por SQL nunca conseguiu resgatar.
-func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo string, conteudo []byte) (*Mensagem, error) {
+func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype string, conteudo []byte) (*Mensagem, error) {
 	var corpo bytes.Buffer
 	form := multipart.NewWriter(&corpo)
 
@@ -243,7 +259,15 @@ func (c *Client) CriaMensagemComAnexo(conversaId int, texto, nomeArquivo string,
 	if err := form.WriteField("message_type", "incoming"); err != nil {
 		return nil, err
 	}
-	arquivo, err := form.CreateFormFile("attachments[]", nomeArquivo)
+	// CreateFormFile fixaria application/octet-stream, e o Chatwoot decide o tipo
+	// do anexo pelo Content-Type da parte: sem o mimetype real, foto de hotel
+	// vira "arquivo" para baixar em vez de imagem na conversa.
+	cabecalho := make(textproto.MIMEHeader)
+	cabecalho.Set("Content-Disposition",
+		fmt.Sprintf(`form-data; name="attachments[]"; filename="%s"`, escapaAspas(nomeArquivo)))
+	cabecalho.Set("Content-Type", ouOctetStream(mimetype))
+
+	arquivo, err := form.CreatePart(cabecalho)
 	if err != nil {
 		return nil, err
 	}

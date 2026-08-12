@@ -24,7 +24,7 @@ type chatwootClient interface {
 	ConversaAberta(sourceId string) (*Conversa, error)
 	CriaConversa(sourceId string) (*Conversa, error)
 	CriaMensagem(sourceId string, conversaId int, texto string) (*Mensagem, error)
-	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo string, conteudo []byte) (*Mensagem, error)
+	CriaMensagemComAnexo(conversaId int, texto, nomeArquivo, mimetype string, conteudo []byte) (*Mensagem, error)
 }
 
 // BaixaMidia devolve o conteúdo do anexo de um evento do WhatsApp. Recebe o
@@ -94,7 +94,7 @@ func (e *Entrada) criaMensagem(
 	if ehMarcador(legenda) {
 		legenda = ""
 	}
-	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, conteudo)
+	return cliente.CriaMensagemComAnexo(conversaId, legenda, midia.Arquivo, midia.Mimetype, conteudo)
 }
 
 // Processa leva uma mensagem recebida do WhatsApp para a conversa do Chatwoot.

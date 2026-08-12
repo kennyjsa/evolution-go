@@ -7,15 +7,15 @@ import (
 
 // anexo guarda o que foi entregue ao Chatwoot pelo caminho de mídia.
 type anexo struct {
-	texto, arquivo string
-	conteudo       []byte
+	texto, arquivo, mimetype string
+	conteudo                 []byte
 }
 
-func (c *clienteFalso) CriaMensagemComAnexo(_ int, texto, arquivo string, conteudo []byte) (*Mensagem, error) {
+func (c *clienteFalso) CriaMensagemComAnexo(_ int, texto, arquivo, mimetype string, conteudo []byte) (*Mensagem, error) {
 	if c.erroMensagem != nil {
 		return nil, c.erroMensagem
 	}
-	c.anexos = append(c.anexos, anexo{texto, arquivo, conteudo})
+	c.anexos = append(c.anexos, anexo{texto, arquivo, mimetype, conteudo})
 	return &Mensagem{Id: 556}, nil
 }
 
@@ -191,5 +191,38 @@ func TestEntradaFalhaAoMarcarLidaNaoQuebraMensagem(t *testing.T) {
 	}
 	if res.Ignorado || res.ChatwootMessageId == 0 {
 		t.Errorf("mensagem perdida por causa do recibo: %+v", res)
+	}
+}
+
+// O Chatwoot decide o tipo do anexo pelo Content-Type da parte do upload: sem o
+// mimetype real, a foto do hotel vira "arquivo para baixar" em vez de imagem na
+// conversa — foi o que apareceu no primeiro teste com celular.
+func TestEntradaEnviaMimetypeDoAnexo(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{}
+	e := monta(repo, cliente).ComBaixadorDeMidia(
+		func(string, []byte) ([]byte, error) { return []byte("jpg"), nil })
+
+	if _, err := e.Processa(evento(t, infoPadrao(), map[string]any{
+		"imageMessage": map[string]any{"mimetype": "image/jpeg"},
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if len(cliente.anexos) != 1 || cliente.anexos[0].mimetype != "image/jpeg" {
+		t.Errorf("mimetype não chegou ao upload: %+v", cliente.anexos)
+	}
+}
+
+func TestEntradaMimetypeDeAudio(t *testing.T) {
+	repo, cliente := novoRepo(), &clienteFalso{}
+	e := monta(repo, cliente).ComBaixadorDeMidia(
+		func(string, []byte) ([]byte, error) { return []byte("ogg"), nil })
+
+	if _, err := e.Processa(evento(t, infoPadrao(), map[string]any{
+		"audioMessage": map[string]any{"mimetype": "audio/ogg; codecs=opus"},
+	})); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if len(cliente.anexos) != 1 || cliente.anexos[0].mimetype != "audio/ogg; codecs=opus" {
+		t.Errorf("mimetype de áudio perdido: %+v", cliente.anexos)
 	}
 }
