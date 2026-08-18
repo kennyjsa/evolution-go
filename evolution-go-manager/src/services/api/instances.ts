@@ -230,17 +230,16 @@ export const getQrCode = async (
 ): Promise<{ qrcode: string; code: string }> => {
   const response = await apiClient.get<{
     message: string;
-    data: { Qrcode: string; Code: string };
+    data: { qrcode: string; code: string };
   }>('/instance/qr', {
     headers: {
       apikey: instanceToken,
     },
   });
 
-  // Map to lowercase for consistency
   return {
-    qrcode: response.data.data.Qrcode,
-    code: response.data.data.Code,
+    qrcode: response.data.data.qrcode,
+    code: response.data.data.code,
   };
 };
 
